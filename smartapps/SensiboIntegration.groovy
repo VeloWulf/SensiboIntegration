@@ -552,7 +552,7 @@ def initialize() {
                 )
                 // d.setIcon("on","on","https://image.ibb.co/jgAMW8/sensibo-sky-off.png") // can't find eveidence that this does anything - probably remove
                 // d.setIcon("off","on","https://image.ibb.co/jgAMW8/sensibo-sky-off.png")
-                d.save()              
+                // d.save() // Deprecated SmartThings method not available in Hubitat
 
                 displayTraceLog( "created ${d.displayName} with id $dni")
                             }
