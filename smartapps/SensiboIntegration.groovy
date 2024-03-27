@@ -15,7 +15,7 @@
  *  Date		  Comments
  *  2021-02-15	Forked from Bryan Li's port from ST
  *  2021-02-28	Resolved old namespace issue (thanks benmek)
- *  2024-03-24	Significant updates, support thermostat capabilities
+ *  2024-03-27	Significant updates, support thermostat capabilities
  */
 
 //file:noinspection GroovySillyAssignment
@@ -1149,7 +1149,7 @@ Map getCapabilities(String PodUid, String mode){
 				productModel : ""
 		]
 	}
-	logDebug("getCapabilities ${data}")
+	logDebug("getCapabilities $PodUid $mode ${data}")
 	return data
 }
 
