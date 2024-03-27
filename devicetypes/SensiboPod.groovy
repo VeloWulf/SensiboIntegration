@@ -14,7 +14,7 @@
  *
  *  Date		Comments
  *  2021-02-15	Forked from Bryan Li's port from ST
- *  2024-03-24	Significant updates, support thermostat capabilities
+ *  2024-03-27	Significant updates, support thermostat capabilities
  *
  */
 
@@ -25,7 +25,7 @@
 //file:noinspection unused
 //file:noinspection SpellCheckingInspection
 //file:noinspection GroovyFallthrough
-//file:noinspection GrMethodMayBeStatic
+//ffile:noinspection GrMethodMayBeStatic
 //file:noinspection GroovyAssignabilityCheck
 //file:noinspection UnnecessaryQualifiedReference
 
@@ -73,35 +73,35 @@ metadata{
 //		attribute "thermostatTemperatureSetpoint", "String"	//google
 
 
-		attribute "temperatureUnit","String"
+		attribute sTEMPUNIT,"String"
 		attribute "productModel","String"
 		attribute "firmwareVersion","String"
 		attribute "Climate","String"
-		attribute "targetTemperature","Number"
+		attribute sTARGTEMP,"Number"
 		attribute "feelsLike","Number"
 		attribute "Error","string"
-		attribute "swing", "String"
+		attribute sSWING, "String"
 		attribute "airConditionerMode","String"
 		attribute "airConditionerFanMode","String"
-		attribute "currentmode","String"
-		attribute "fanLevel","String"
+		attribute sCURM,"String"
+		attribute sFANMODE,"String"
 
 
 //		attribute "statusText","String"
 		command "setAll",[
 				[name:"Thermostat mode*", type: "ENUM", constraints: [
-						"cool",
+						sCOOL,
 						"fan",
 						"dry",
-						"auto",
-						"heat",
+						sAUTO,
+						sHEAT,
 						sOFF ]
 				],
 				[name: "Temperature*", type: "NUMBER", description: ""],
 				[name:"Fan level*", type: "ENUM", constraints: [
 						sON,
 						"circulate",
-						"auto",
+						sAUTO,
 						"quiet",
 						"low",
 						"medium",
@@ -114,6 +114,8 @@ metadata{
 		command "setMaxCoolTemp", [[ name: "temperature*", type: "NUMBER"]]
 		command "setMinHeatTemp", [[ name: "temperature*", type: "NUMBER"]]
 		command "setMaxHeatTemp", [[ name: "temperature*", type: "NUMBER"]]
+		command "resetMinMax"
+
 		// command "switchFanLevel"
 		//command "switchMode"
 		//command "raiseCoolSetpoint"
@@ -150,11 +152,11 @@ metadata{
 //		command "fullswing"
 		command "setAirConditionerMode", [
 				[ name:"State*", type: "ENUM", constraints: [
-						"cool",
+						sCOOL,
 						"fan",
 						"dry",
-						"auto",
-						"heat",
+						sAUTO,
+						sHEAT,
 						sOFF ]
 				]
 		]
@@ -163,7 +165,7 @@ metadata{
 				[ name:"State*", type: "ENUM", constraints: [
 						sON,
 						"circulate",
-						"auto",
+						sAUTO,
 						"quiet",
 						"low",
 						"medium",
@@ -183,7 +185,7 @@ metadata{
 						sON, sOFF ]
 				],
 				[name:"Climate react trigger type*", type: "ENUM", constraints: [
-						"temperature", "humidity", "feelsLike" ]
+						sTEMP, sHUMIDITY, "feelsLike" ]
 				],
 				[name:"Low Temp or humidity*", type: "NUMBER", description: "Low Threshold"],
 				[name:"High Temp or humidity*", type: "NUMBER", description: "High Threshold"],
@@ -204,63 +206,82 @@ metadata{
 @Field static final String sCLRRED        = 'red'
 @Field static final String sCLRGRY        = 'gray'
 @Field static final String sCLRORG        = 'orange'
+
 @Field static final String sON            = 'on'
 @Field static final String sOFF           = 'off'
-
+@Field static final String sTEMP          = 'temperature'
+@Field static final String sTARGTEMP      = 'targetTemperature'
+@Field static final String sSW            = 'switch'
+@Field static final String sCURM          = 'currentmode'
+@Field static final String sFANMODE       = 'fanLevel'
+@Field static final String sSWING         = 'swing'
+@Field static final String sCOOL          = 'cool'
+@Field static final String sHEAT          = 'heat'
+@Field static final String sAUTO          = 'auto'
+@Field static final String sTHERMMODE     = 'thermostatMode'
+@Field static final String sTHERMOPER     = 'thermostatOperatingState'
+@Field static final String sTHERMFANMODE  = 'thermostatFanMode'
+@Field static final String sHEATSP        = 'heatingSetpoint'
+@Field static final String sCOOLSP        = 'coolingSetpoint'
+@Field static final String sTHERMSP       = 'thermostatSetpoint'
+@Field static final String sHUMIDITY      = 'humidity'
+@Field static final String sTEMPUNIT      = 'temperatureUnit'
+@Field static final String sC             = 'C'
+@Field static final String sF             = 'F'
 
 def installed(){
 	logTrace("installed")
 	// Let's just set a few things before starting
-	def hubScale = getTemperatureScale()
+	String hubScale= gtLtScale()
 
 	// Let's set all base thermostat settings
-	if(hubScale == "C"){
-		sendEvent(name: "minCoolTemp", value: 15.5, unit: "C") // 60°F
-		sendEvent(name: "minCoolingSetpoint", value: 15.5, unit: "C") // Google
-		sendEvent(name: "maxCoolTemp", value: 35.0, unit: "C") // 95°F
-		sendEvent(name: "maxCoolingSetpoint", value: 35.0, unit: "C") // Google
-		sendEvent(name: "minHeatTemp", value: 1.5, unit: "C") // 35°F
-		sendEvent(name: "minHeatingSetpoint", value: 1.5, unit: "C") // Google
-		sendEvent(name: "maxHeatTemp", value: 26.5, unit: "C") // 80°F
-		sendEvent(name: "maxHeatingSetpoint", value: 26.5, unit: "C") // Google
-		sendEvent(name: "temperature", value: 22.0, unit: "C") // 72°F
-		sendEvent(name: "heatingSetpoint", value: 21.0, unit: "C") // 70°F
-		sendEvent(name: "coolingSetpoint", value: 24.5, unit: "C") // 76°F
-		sendEvent(name: "thermostatSetpoint", value: 21.0, unit: "C") // 70°F
+	if(hubScale == sC){
+		wsendEvent(name: "minCoolTemp", value: 15.5, unit: sC) // 60°F
+		wsendEvent(name: "minCoolingSetpoint", value: 15.5, unit: sC) // Google
+		wsendEvent(name: "maxCoolTemp", value: 35.0, unit: sC) // 95°F
+		wsendEvent(name: "maxCoolingSetpoint", value: 35.0, unit: sC) // Google
+		wsendEvent(name: "minHeatTemp", value: 1.5, unit: sC) // 35°F
+		wsendEvent(name: "minHeatingSetpoint", value: 1.5, unit: sC) // Google
+		wsendEvent(name: "maxHeatTemp", value: 26.5, unit: sC) // 80°F
+		wsendEvent(name: "maxHeatingSetpoint", value: 26.5, unit: sC) // Google
+		wsendEvent(name: sTEMP, value: 22.0, unit: sC) // 72°F
+		wsendEvent(name: sHEATSP, value: 21.0, unit: sC) // 70°F
+		wsendEvent(name: sCOOLSP, value: 24.5, unit: sC) // 76°F
+		wsendEvent(name: sTHERMSP, value: 21.0, unit: sC) // 70°F
 
-		sendEvent(name: "targetTemperature", value: 21.0, unit: "C") // 70°F
-//		sendEvent(name: "thermostatThreshold", value: 0.5, unit: "C") // Set by user
+		wsendEvent(name: sTARGTEMP, value: 21.0, unit: sC) // 70°F
+//		wsendEvent(name: "thermostatThreshold", value: 0.5, unit: sC) // Set by user
 	}else{
-		sendEvent(name: "minCoolTemp", value: 60, unit: "F") // 15.5°C
-		sendEvent(name: "minCoolingSetpoint", value: 60, unit: "F") // Google
-		sendEvent(name: "maxCoolTemp", value: 95, unit: "F") // 35°C
-		sendEvent(name: "maxCoolingSetpoint", value: 95, unit: "F") // Google
-		sendEvent(name: "minHeatTemp", value: 35, unit: "F") // 1.5°C
-		sendEvent(name: "minHeatingSetpoint", value: 35, unit: "F") // Google
-		sendEvent(name: "maxHeatTemp", value: 80, unit: "F") // 26.5°C
-		sendEvent(name: "maxHeatingSetpoint", value: 80, unit: "F") // Google
-		sendEvent(name: "temperature", value: 72, unit: "F") // 22°C
-		sendEvent(name: "heatingSetpoint", value: 70, unit: "F") // 21°C
-		sendEvent(name: "coolingSetpoint", value: 76, unit: "F") // 24.5°C
-		sendEvent(name: "thermostatSetpoint", value: 70, unit: "F") // 21°C
+		wsendEvent(name: "minCoolTemp", value: 60, unit: sF) // 15.5°C
+		wsendEvent(name: "minCoolingSetpoint", value: 60, unit: sF) // Google
+		wsendEvent(name: "maxCoolTemp", value: 95, unit: sF) // 35°C
+		wsendEvent(name: "maxCoolingSetpoint", value: 95, unit: sF) // Google
+		wsendEvent(name: "minHeatTemp", value: 35, unit: sF) // 1.5°C
+		wsendEvent(name: "minHeatingSetpoint", value: 35, unit: sF) // Google
+		wsendEvent(name: "maxHeatTemp", value: 80, unit: sF) // 26.5°C
+		wsendEvent(name: "maxHeatingSetpoint", value: 80, unit: sF) // Google
+		wsendEvent(name: sTEMP, value: 72, unit: sF) // 22°C
+		wsendEvent(name: sHEATSP, value: 70, unit: sF) // 21°C
+		wsendEvent(name: sCOOLSP, value: 76, unit: sF) // 24.5°C
+		wsendEvent(name: sTHERMSP, value: 70, unit: sF) // 21°C
 
-		sendEvent(name: "targetTemperature", value: 70, unit: "F") // 21°C
-//		sendEvent(name: "thermostatThreshold", value: 1.0, unit: "F") // Set by user
+		wsendEvent(name: sTARGTEMP, value: 70, unit: sF) // 21°C
+//		wsendEvent(name: "thermostatThreshold", value: 1.0, unit: sF) // Set by user
 	}
-	sendEvent(name: "switch", value: sOFF)
-	sendEvent(name: "thermostatFanMode", value: "auto")
-	sendEvent(name: "thermostatMode", value: sOFF)
-	sendEvent(name: "thermostatOperatingState", value: "idle")
-	sendEvent(name: "supportedThermostatModes", value: ["heat", "cool", "auto", sOFF])
-	sendEvent(name: 'supportedThermostatFanModes', value: [sON, "circulate", "auto"])
-//	sendEvent(name: "maxUpdateInterval", value: 65)
-//	sendEvent(name: "lastTempUpdate", value: new Date() )
+	wsendEvent(name: sSW, value: sOFF)
+	wsendEvent(name: sTHERMFANMODE, value: sAUTO)
+	wsendEvent(name: sTHERMMODE, value: sOFF)
+	wsendEvent(name: sTHERMOPER, value: "idle")
+	wsendEvent(name: "supportedThermostatModes", value: [sHEAT, sCOOL, sAUTO, sOFF])
+	wsendEvent(name: 'supportedThermostatFanModes', value: [sON, "circulate", sAUTO])
+//	wsendEvent(name: "maxUpdateInterval", value: 65)
+//	wsendEvent(name: "lastTempUpdate", value: new Date() )
 
-	sendEvent(name: "fanLevel", value: "auto")
-	sendEvent(name: 'airConditionerFanMode', value: "auto")
-	sendEvent(name: "swing", value: "stopped")
-	sendEvent(name: "currentmode", value: sOFF)
-	sendEvent(name: 'airConditionerMode', value: sOFF)
+	wsendEvent(name: sFANMODE, value: sAUTO)
+	wsendEvent(name: 'airConditionerFanMode', value: sAUTO)
+	wsendEvent(name: sSWING, value: "stopped")
+	wsendEvent(name: sCURM, value: sOFF)
+	wsendEvent(name: 'airConditionerMode', value: sOFF)
 }
 
 def updated(){
@@ -278,10 +299,6 @@ void logsOff(){
 
 
 
-String gtDisplayName(){ return (String)device.displayName }
-String gtDNI(){ return (String)device.deviceNetworkId }
-String gtTempUnit(){ return (String)device.currentValue("temperatureUnit") }
-
 
 // Standard thermostat commands
 
@@ -292,22 +309,22 @@ def off(){
 
 def heat(){
 	logTrace( "heat()")
-	modeMode("heat")
+	modeMode(sHEAT)
 }
 
 def cool(){
 	logTrace( "cool()")
-	modeMode("cool")
+	modeMode(sCOOL)
 }
 
 def auto(){
 	logTrace( "auto()")
-	modeMode("auto")
+	modeMode(sAUTO)
 }
 
 def fanAuto(){
 	logTrace( "fanAuto()")
-	dfanLevel("auto")
+	dfanLevel(sAUTO)
 }
 
 def fanCirculate(){
@@ -329,7 +346,7 @@ def setThermostatFanMode(String mode){
 		case "circulate":
 			fanCirculate()
 			break
-		case "auto":
+		case sAUTO:
 			fanAuto()
 			break
 		default:
@@ -342,7 +359,7 @@ def setThermostatMode(mode){
 	logTrace( "setThermostatMode($mode)")
 
 	switch (mode){
-		case "cool":
+		case sCOOL:
 			cool()
 			break
 			//case "fan":
@@ -351,10 +368,10 @@ def setThermostatMode(mode){
 			//case "dry":
 			//	returnCommand = modeDry()
 			//	break
-		case "auto":
+		case sAUTO:
 			auto()
 			break
-		case "heat":
+		case sHEAT:
 			heat()
 			break
 		case sOFF:
@@ -372,13 +389,13 @@ def setHeatingSetpoint(itemp){
 	temp = itemp.toInteger()
 	logDebug("setTemperature : " + temp)
 
-	Boolean result = wsetACStates("heat", temp, sON, null, null)
+	Boolean result = wsetACStates(sHEAT, temp, sON, null, null)
 
 	if(result){
 		logInfo( "Heating temperature changed to " + temp + " for " + gtDNI())
 
-		generateModeEvent("heat")
-		sendEvent(name: 'heatingSetpoint', value: temp)
+		generateModeEvent(sHEAT)
+		wsendEvent(name: sHEATSP, value: temp)
 		generateSetTempEvent(temp)
 
 	}else{
@@ -394,14 +411,14 @@ def setCoolingSetpoint(itemp){
 	temp = itemp.toInteger()
 	logDebug("setTemperature : " + temp )
 
-	Boolean result = wsetACStates("cool", temp, sON, null, null)
+	Boolean result = wsetACStates(sCOOL, temp, sON, null, null)
 
 	if(result){
 		logInfo( "Cooling temperature changed to " + temp + " for " + gtDNI())
 
-		generateModeEvent("cool")
+		generateModeEvent(sCOOL)
 
-		sendEvent(name: 'coolingSetpoint', value: temp)
+		wsendEvent(name: sCOOLSP, value: temp)
 		generateSetTempEvent(temp)
 	}else{
 		generateErrorEvent()
@@ -420,7 +437,7 @@ def on(){
 	logDebug("Result : " + result)
 	if(result){
 		logInfo( "AC turned ON for " + gtDNI())
-		generateModeEvent(device.currentValue("currentmode"))
+		generateModeEvent(sdCV(sCURM))
 	}else{
 		generateErrorEvent()
 	}
@@ -470,58 +487,58 @@ def fanStrong(){
 
 // Logging and event management
 def generatefanLevelEvent(String Level){
-	String LevelBefore = device.currentValue("fanLevel")
-	sendEvent(name: "fanLevel", value: Level, descriptionText: "Fan mode is now ${Level}")
+	String LevelBefore = sdCV(sFANMODE)
+	wsendEvent(name: sFANMODE, value: Level, descriptionText: "Fan mode is now ${Level}")
 	if(LevelBefore!=Level) logInfo( "Fan level changed to " + Level + " for " + gtDNI())
-	sendEvent(name: 'airConditionerFanMode', value: Level)
+	wsendEvent(name: 'airConditionerFanMode', value: Level)
 	String mode
 	mode = Level
 	mode = (mode in ["high", "medium", "strong"]) ? sON : mode
 	mode = (mode in ["low", "quiet"]) ? "circulate" : mode
-	mode = !(mode in [sON, "circulate"]) ? "auto" : mode
-	sendEvent(name: 'thermostatFanMode', value: mode)
+	mode = !(mode in [sON, "circulate"]) ? sAUTO : mode
+	wsendEvent(name: 'thermostatFanMode', value: mode)
 }
 
 void generateModeEvent(String mode, Boolean doSW=true){
-	if(mode != sOFF) sendEvent(name: "currentmode", value: mode, descriptionText: "AC mode is now ${mode}")
-	sendEvent(name: 'airConditionerMode', value: mode)
+	if(mode != sOFF) wsendEvent(name: sCURM, value: mode, descriptionText: "AC mode is now ${mode}")
+	wsendEvent(name: 'airConditionerMode', value: mode)
 
 	String m
-	if(mode in ['heat','cool','auto',sOFF])
+	if(mode in [sHEAT,sCOOL,sAUTO,sOFF])
 		m= mode
 	else if(mode in ["dry"]) {
-		m= 'cool'
+		m= sCOOL
 	}else // 'fan'
-		m= 'off'
-	sendEvent(name: "thermostatMode", value: m, descriptionText: "AC mode is now ${m}")
+		m= sOFF
+	wsendEvent(name: sTHERMMODE, value: m, descriptionText: "AC mode is now ${m}")
 
 	m= sBLANK
-	if(mode in ["cool","dry"]){
+	if(mode in [sCOOL,"dry"]){
 		m= 'cooling'
-	}else if(mode in ["heat","auto"]){
+	}else if(mode in [sHEAT,sAUTO]){
 		m= 'heating'
 	}else if(mode=="fan"){
 		m= 'fan only'
 	}else{
 		m= 'idle'
 	}
-	sendEvent(name: 'thermostatOperatingState', value: m)
+	wsendEvent(name: sTHERMOPER, value: m)
 
 	if(doSW) generateSwitchEvent(mode==sOFF ? sOFF : sON)
 }
 
 void generateErrorEvent(){
 	logError(gtDisplayName()+" FAILED to set the AC State")
-//	sendEvent(name: "Error", value: "Error", descriptionText: gtDisplayName()+" FAILED to set or get the AC State")
+//	wsendEvent(name: "Error", value: "Error", descriptionText: gtDisplayName()+" FAILED to set or get the AC State")
 }
 
 def generateSetTempEvent(temp){
-	sendEvent(name: "thermostatSetpoint", value: temp, descriptionText: gtDisplayName()+" set temperature is now ${temp}")
-	sendEvent(name: "targetTemperature", value: temp, descriptionText: gtDisplayName()+" set temperature is now ${temp}")
+	wsendEvent(name: sTHERMSP, value: temp, descriptionText: gtDisplayName()+" set temperature is now ${temp}")
+	wsendEvent(name: sTARGTEMP, value: temp, descriptionText: gtDisplayName()+" set temperature is now ${temp}")
 }
 
 void generateSwitchEvent(String status){
-	sendEvent(name: "switch", value: status, descriptionText: gtDisplayName()+" is now ${status}")
+	wsendEvent(name: sSW, value: status, descriptionText: gtDisplayName()+" is now ${status}")
 }
 
 // Unit conversion
@@ -537,24 +554,24 @@ static Double fToC(temp){
 void switchMode(){
 	logTrace( "switchMode()")
 
-	String currentMode = device.currentValue("currentmode")
+	String currentMode = sdCV(sCURM)
 	logDebug("switching AC mode from current mode: $currentMode")
 
 	switch (currentMode){
-		case "heat":
-			modeMode("cool")
+		case sHEAT:
+			modeMode(sCOOL)
 			break
-		case "cool":
+		case sCOOL:
 			modeMode("fan")
 			break
 		case "fan":
 			modeMode("dry")
 			break
 		case "dry":
-			modeMode("auto")
+			modeMode(sAUTO)
 			break
-		case "auto":
-			modeMode("heat")
+		case sAUTO:
+			modeMode(sHEAT)
 			break
 	}
 }
@@ -566,14 +583,14 @@ void modeMode(String newMode){
 	logInfo( "Mode change request " + newMode + " for " + dni)
 	Boolean result
 
-	String LevelBefore = device.currentValue("fanLevel")
+	String LevelBefore = sdCV(sFANMODE)
 	String Level; Level = LevelBefore
 
 	if(newMode==sOFF){ // off always exists
 		result = wsetACStates( null, null, sOFF, null, null)
 
 	}else{
-		Map capabilities = (Map)parent.getCapabilities(dni,newMode)
+		Map capabilities = gtCapabilities(newMode)
 		if(capabilities.remoteCapabilities != null){
 			// see if fan level exists
 			List<String> fanLevels = ((Map<String,List>)capabilities.remoteCapabilities).fanLevels
@@ -586,7 +603,7 @@ void modeMode(String newMode){
 			result = wsetACStates(newMode, null, sON, Level, null)
 
 		}else{ // the mode does not exist, so guess one
-			Map<String,Map> themodes = (Map)parent.getCapabilities(dni,"modes")
+			Map<String,Map> themodes = gtCapabilities("modes")
 			List<String> lmodes; lmodes=[]
 			themodes.each{
 				lmodes= lmodes+[it.key] as List<String>
@@ -614,7 +631,7 @@ void modeMode(String newMode){
 String GetNextMode(String mode, List<String>modes){
 	logTrace( "GetNextMode " + mode + " modes: $modes")
 
-	List<String> listMode = ['heat','cool',/*'fan','dry',*/ 'auto',sOFF]
+	List<String> listMode = [sHEAT,sCOOL,/*'fan','dry',*/ sAUTO,sOFF]
 	String newMode = returnNext(listMode,modes,mode)
 
 	logDebug("Next Mode = " + newMode)
@@ -627,10 +644,10 @@ void NextMode(sMode){
 
 	if(sMode != null){
 		switch (sMode){
-			case "heat":
+			case sHEAT:
 				heat()
 				break
-			case "cool":
+			case sCOOL:
 				cool()
 				break
 			case "fan":
@@ -639,7 +656,7 @@ void NextMode(sMode){
 			case "dry":
 				modeDry()
 				break
-			case "auto":
+			case sAUTO:
 				auto()
 				break
 			case sOFF:
@@ -655,7 +672,7 @@ String GetNextFanLevel(String fanLevel, List<String>fanLevels){
 
 	if(!fanLevels) return null
 
-	List<String> listFanLevel = ['low','medium','high','auto','quiet','medium_high','medium_low','strong']
+	List<String> listFanLevel = ['low','medium','high',sAUTO,'quiet','medium_high','medium_low','strong']
 	String newFanLevel = returnNext(listFanLevel,fanLevels,fanLevel)
 
 	logDebug("Next fanLevel = " + newFanLevel)
@@ -716,52 +733,52 @@ def parseEventData(Map<String,Object> results){
 				Boolean doit; doit= true
 
 				switch(name){
-					case "voltage":
-						unit="mA"
-						break
+					case sTEMP:
+					case "feelsLike":
+					case sHUMIDITY:
 					case "battery":
 					case "powerSource":
 					case "Climate":
-					case "temperatureUnit":
-					case "temperature":
-					case "feelsLike":
-					case "humidity":
+					case sTEMPUNIT:
 					case "productModel":
 					case "firmwareVersion":
 					case "Error":
 						break
-					case "updated":
-						doit= false
-						break
 					case sON:
-					case "switch":
+					case sSW:
 						generateSwitchEvent(value as String)
 						if(value == sOFF) generateModeEvent(value as String,false)
 						doit= false
 						break
-					case "thermostatMode":
-					case "currentmode":
+					case sTHERMMODE:
+					case sCURM:
 						// this presumes switch was run first (above)
-						if(device.currentValue("switch") != sOFF){
+						if(sdCV(sSW) != sOFF){
 							generateModeEvent(value as String,false)
-						} else if(device.currentValue("currentmode") != value)
-							sendEvent(name: "currentmode", value: value, descriptionText: "AC mode is now ${value}")
+						} else if(sdCV(sCURM) != value)
+							wsendEvent(name: sCURM, value: value, descriptionText: "AC mode is now ${value}")
 						doit= false
 						break
-					case  "coolingSetpoint":
-					case  "heatingSetpoint":
-					case  "thermostatSetpoint":
-					case  "targetTemperature":
+					case  sTARGTEMP:
+					case  sCOOLSP:
+					case  sHEATSP:
+					case  sTHERMSP:
 						generateSetTempEvent(value)
 						break
-					case "thermostatFanMode":
-					case "fanLevel":
+					case sTHERMFANMODE:
+					case sFANMODE:
 						generatefanLevelEvent(value as String)
 						doit= false
 						break
-					case "swing":
+					case sSWING:
 						generateSwingModeEvent(value as String)
 						doit= false
+						break
+					case "updated":
+						doit= false
+						break
+					case "voltage":
+						unit="mA"
 						break
 					default:
 						logWarn("UNKNOWN name: " + name + " value: " + value)
@@ -772,16 +789,16 @@ def parseEventData(Map<String,Object> results){
 							value: value,
 							descriptionText: getThermostatDescriptionText(name, value),
 					] + (unit!=sNULL ? [unit: unit] : [:])
-					sendEvent(evt)
+					wsendEvent(evt)
 				}
 			}
 
-			String mode= device.currentValue("currentmode")
-			Integer Setpoint = device.currentValue("targetTemperature").toInteger()
-			if(mode in ["cool","auto"])
-				sendEvent(name: 'coolingSetpoint', value: Setpoint)
-			if(mode in ["heat","auto"])
-				sendEvent(name: 'heatingSetpoint', value: Setpoint)
+			String mode= sdCV(sCURM)
+			Integer Setpoint = idCV(sTARGTEMP).toInteger()
+			if(mode in [sCOOL,sAUTO])
+				wsendEvent(name: sCOOLSP, value: Setpoint)
+			if(mode in [sHEAT,sAUTO])
+				wsendEvent(name: sHEATSP, value: Setpoint)
 		}catch(e){
 			logError("parse error",e)
 		}
@@ -836,10 +853,10 @@ def setDrySetpoint(itemp){
 void lowerTemperature(){
 	logTrace( "lowerTemperature()")
 
-	String operMode = device.currentValue("currentmode")
+	String operMode = sdCV(sCURM)
 
 	Integer Setpoint
-	Setpoint = device.currentValue("targetTemperature").toInteger()
+	Setpoint = idCV(sTARGTEMP)
 	logDebug("Current target temperature = ${Setpoint}")
 
 	Setpoint = temperatureDown(Setpoint)
@@ -849,10 +866,10 @@ void lowerTemperature(){
 	}
 
 	switch (operMode){
-		case "heat":
+		case sHEAT:
 			setHeatingSetpoint(Setpoint)
 			break
-		case "cool":
+		case sCOOL:
 			setCoolingSetpoint(Setpoint)
 			break
 		case "fan":
@@ -861,7 +878,7 @@ void lowerTemperature(){
 		case "dry":
 			setDrySetpoint(Setpoint)
 			break
-		case "auto":
+		case sAUTO:
 			setHeatingSetpoint(Setpoint)
 			setCoolingSetpoint(Setpoint)
 			break
@@ -873,10 +890,10 @@ void lowerTemperature(){
 void raiseTemperature(){
 	logTrace( "raiseTemperature()"	)
 
-	String operMode = device.currentValue("currentmode")
+	String operMode = sdCV(sCURM)
 
 	Integer Setpoint
-	Setpoint = device.currentValue("targetTemperature").toInteger()
+	Setpoint = idCV(sTARGTEMP)
 	logDebug("Current target temperature = ${Setpoint}")
 
 	Setpoint = temperatureUp(Setpoint)
@@ -885,10 +902,10 @@ void raiseTemperature(){
 		return
 
 	switch (operMode){
-		case "heat":
+		case sHEAT:
 			setHeatingSetpoint(Setpoint)
 			break
-		case "cool":
+		case sCOOL:
 			setCoolingSetpoint(Setpoint)
 			break
 		case "fan":
@@ -897,7 +914,7 @@ void raiseTemperature(){
 		case "dry":
 			setDrySetpoint(Setpoint)
 			break
-		case "auto":
+		case sAUTO:
 			setHeatingSetpoint(Setpoint)
 			setCoolingSetpoint(Setpoint)
 			break
@@ -931,7 +948,7 @@ void raiseCoolSetpoint(){
 	logTrace( "raiseCoolSetpoint()")
 
 	Integer Setpoint
-	Setpoint = device.currentValue("targetTemperature").toInteger()
+	Setpoint = idCV(sTARGTEMP)
 	logDebug("Current target temperature = ${Setpoint}")
 
 	Setpoint = temperatureUp(Setpoint)
@@ -940,9 +957,9 @@ void raiseCoolSetpoint(){
 	if(result){
 		logInfo( "Cooling temperature changed to " + Setpoint + " for " + gtDNI())
 
-		if(device.currentValue("switch") == sOFF){ generateSwitchEvent(sON) }
+		if(sdCV(sSW) == sOFF){ generateSwitchEvent(sON) }
 
-		sendEvent(name: 'coolingSetpoint', value: Setpoint)
+		wsendEvent(name: sCOOLSP, value: Setpoint)
 		// todo auto?
 
 		generateSetTempEvent(Setpoint)
@@ -958,7 +975,7 @@ void raiseHeatSetpoint(){
 	logTrace( "raiseHeatSetpoint()")
 
 	Integer Setpoint
-	Setpoint = device.currentValue("targetTemperature").toInteger()
+	Setpoint = idCV(sTARGTEMP)
 	String theTemp = gtTempUnit()
 
 	logDebug("Current target temperature = ${Setpoint}")
@@ -969,9 +986,9 @@ void raiseHeatSetpoint(){
 	if(result){
 		logInfo( "Heating temperature changed to " + Setpoint + " for " + gtDNI())
 
-		if(device.currentValue("switch") == sOFF){ generateSwitchEvent(sON) }
+		if(sdCV(sSW) == sOFF){ generateSwitchEvent(sON) }
 
-		sendEvent(name: 'heatingSetpoint', value: Setpoint)
+		wsendEvent(name: sHEATSP, value: Setpoint)
 		// todo auto?
 
 		generateSetTempEvent(Setpoint)
@@ -986,12 +1003,12 @@ void raiseHeatSetpoint(){
 
 }
 
-List<Integer> GetTempValues(){
+List<Integer> GetTempValues(String mode=sNULL){
 	String sunit = gtTempUnit()
-	Map capabilities = (Map)parent.getCapabilities(gtDNI(), device.currentValue("currentmode"))
+	Map capabilities = gtCapabilities( mode ?: sdCV(sCURM))
 	List<Integer> values
 
-	if(sunit == "F"){
+	if(sunit == sF){
 		if(((Map<String,Map>)capabilities.remoteCapabilities).temperatures.F == null){
 			return null
 		}
@@ -1027,7 +1044,7 @@ void lowerCoolSetpoint(){
 	logTrace( "lowerCoolSetpoint()")
 
 	Integer Setpoint
-	Setpoint = device.currentValue("targetTemperature").toInteger()
+	Setpoint = idCV(sTARGTEMP)
 	logDebug("Current target temperature = ${Setpoint}")
 
 	Setpoint = temperatureDown(Setpoint)
@@ -1037,9 +1054,9 @@ void lowerCoolSetpoint(){
 	if(result){
 		logInfo( "Cooling temperature changed to " + Setpoint + " for " + gtDNI())
 
-		if(device.currentValue("switch") == sOFF){ generateSwitchEvent(sON) }
+		if(sdCV(sSW) == sOFF){ generateSwitchEvent(sON) }
 
-		sendEvent(name: 'coolingSetpoint', value: Setpoint)
+		wsendEvent(name: sCOOLSP, value: Setpoint)
 		// todo auto
 
 		generateSetTempEvent(Setpoint)
@@ -1057,7 +1074,7 @@ void lowerHeatSetpoint(){
 	logTrace( "lowerHeatSetpoint()")
 
 	Integer Setpoint
-	Setpoint = device.currentValue("targetTemperature").toInteger()
+	Setpoint = idCV(sTARGTEMP)
 
 	logDebug("Current target temperature = ${Setpoint}")
 
@@ -1067,9 +1084,9 @@ void lowerHeatSetpoint(){
 	if(result){
 		logInfo( "Heating temperature changed to " + Setpoint + " for " + gtDNI())
 
-		if(device.currentValue("switch") == sOFF){ generateSwitchEvent(sON) }
+		if(sdCV(sSW) == sOFF){ generateSwitchEvent(sON) }
 
-		sendEvent(name: 'heatingSetpoint', value: Setpoint)
+		wsendEvent(name: sHEATSP, value: Setpoint)
 
 		generateSetTempEvent(Setpoint)
 
@@ -1086,7 +1103,7 @@ void lowerHeatSetpoint(){
 def dfanLevel(String newLevel){
 	logTrace( "dfanLevel " + newLevel)
 
-	Map capabilities = (Map)parent.getCapabilities(gtDNI(), device.currentValue("currentmode"))
+	Map capabilities = gtCapabilities(sdCV(sCURM))
 	String Level; Level = newLevel
 	if(capabilities.remoteCapabilities != null){
 		// see if fan level exists
@@ -1100,7 +1117,7 @@ def dfanLevel(String newLevel){
 		Boolean result = wsetACStates( null, null, sON, Level, null)
 
 		if(result){
-			if(device.currentValue("switch") == sOFF){ generateSwitchEvent(sON) }
+			if(sdCV(sSW) == sOFF){ generateSwitchEvent(sON) }
 			generatefanLevelEvent(Level)
 		}else{
 			generateErrorEvent()
@@ -1117,7 +1134,7 @@ def setAll(String newMode,temp,String fan){
 
 	Integer Setpoint = temp.toInteger()
 	String LevelBefore = fan
-	Map capabilities = (Map)parent.getCapabilities(gtDNI(),newMode)
+	Map capabilities = gtCapabilities(newMode)
 	String Level
 	Level = LevelBefore
 	if(capabilities.remoteCapabilities != null){
@@ -1151,66 +1168,101 @@ def fullswing(){
 	setSwingMode("rangeFull")
 }
 
-def setMinCoolTemp(Double value){
-	//List<Integer> values= GetTempValues()
-	//if(values==null) return -1
-	def units = getTemperatureScale()
+Integer GetMinMax(String mode,Boolean min,Boolean isIn,value){
+	List<Integer> values= GetTempValues(mode)
+	if(values==null || values.empty) return -1
+
+	Integer res
+	if(values.size() && !isIn) {
+		res= min ? values.first() : values.last()
+		return res
+	}
+
+	if(isIn) return (value.toInteger() in values) ? value.toInteger() : -1
+	else return -1
+}
+
+def resetMinMax(){
+	logTrace("resetMinMax()")
+// reset these to what AC reports
+	setMinCoolTemp(null)
+	setMaxCoolTemp(null)
+	setMinHeatTemp(null)
+	setMaxHeatTemp(null)
+}
+
+def setMinCoolTemp(Double value=null){
 	logTrace("setMinCoolTemp($value)")
-	def t = device.currentValue("coolingSetpoint")
-	sendEvent(name: "minCoolTemp", value: value, unit: units)
-	sendEvent(name: "minCoolingSetpoint", value: value, unit: units)
-	if(t < value){
-		setCoolingSetpoint(value)
+	Integer v= GetMinMax('cool', true, (value!=null), value)
+	String units = gtLtScale()
+	if(v!= -1){
+		Integer t = idCV(sCOOLSP)
+		wsendEvent(name: "minCoolTemp", value: v, unit: units)
+		wsendEvent(name: "minCoolingSetpoint", value: v, unit: units)
+		if(t < value){
+			//setCoolingSetpoint(value) // this may turn on system
+		}
+	}else{
+		logWarn("invalid min cool temperature $value "+units)
 	}
 }
 
-def setMaxCoolTemp(Double value){
-	//List<Integer> values= GetTempValues()
-	//if(values==null) return -1
-	def units = getTemperatureScale()
+def setMaxCoolTemp(Double value=null){
 	logTrace("setMaxCoolTemp($value)")
-	def t = device.currentValue("coolingSetpoint")
-	sendEvent(name: "maxCoolTemp", value: value, unit: units)
-	sendEvent(name: "maxCoolingSetpoint", value: value, unit: units)
-	if(t > value){
-		setCoolingSetpoint(value)
+	Integer v= GetMinMax('cool', false, (value!=null), value)
+	String units = gtLtScale()
+	if(v!= -1){
+		Integer t = idCV(sCOOLSP)
+		wsendEvent(name: "maxCoolTemp", value: v, unit: units)
+		wsendEvent(name: "maxCoolingSetpoint", value: v, unit: units)
+		if(t > value){
+			//setCoolingSetpoint(value) // this may turn on system
+		}
+	}else{
+		logWarn("invalid max cool temperature $value "+units)
 	}
 }
 
-def setMinHeatTemp(Double value){
-	//List<Integer> values= GetTempValues()
-	//if(values==null) return -1
-	def units = getTemperatureScale()
+def setMinHeatTemp(Double value=null){
 	logTrace("setMinHeatTemp($value)")
-	def t = device.currentValue("heatingSetpoint")
-	sendEvent(name: "minHeatTemp", value: value, unit: units)
-	sendEvent(name: "minHeatingSetpoint", value: value, unit: units)
-	if(t < value){
-		setHeatingSetpoint(value)
+	Integer v= GetMinMax('heat', true, (value!=null), value)
+	String units = gtLtScale()
+	if(v!= -1){
+		Integer t = idCV(sHEATSP)
+		wsendEvent(name: "minHeatTemp", value: v, unit: units)
+		wsendEvent(name: "minHeatingSetpoint", value: v, unit: units)
+		if(t < value){
+			//setHeatingSetpoint(value) // this may turn on system
+		}
+	}else{
+		logWarn("invalid min heat temperature $value "+units)
 	}
 }
 
-def setMaxHeatTemp(Double value){
-	//List<Integer> values= GetTempValues()
-	//if(values==null) return -1
-	def units = getTemperatureScale()
+def setMaxHeatTemp(Double value=null){
 	logTrace("setMaxHeatTemp($value)")
-	def t = device.currentValue("heatingSetpoint")
-	sendEvent(name: "maxHeatTemp", value: value, unit: units)
-	sendEvent(name: "maxHeatingSetpoint", value: value, unit: units)
-	if(t > value){
-		setHeatingSetpoint(value)
+	Integer v= GetMinMax('heat', false, (value!=null), value)
+	String units = gtLtScale()
+	if(v!= -1){
+		Integer t = idCV(sHEATSP)
+		wsendEvent(name: "maxHeatTemp", value: v, unit: units)
+		wsendEvent(name: "maxHeatingSetpoint", value: v, unit: units)
+		if(t > value){
+			//setHeatingSetpoint(value) // this may turn on system
+		}
+	}else{
+		logWarn("invalid max heat temperature $value "+units)
 	}
 }
 
 void setAirConditionerMode(String modes){
 	logTrace( "setAirConditionerMode($modes)")
 
-	String currentMode = device.currentValue("currentmode")
+	String currentMode = sdCV(sCURM)
 	logDebug("switching AC mode from current mode: $currentMode")
 
 	switch (modes){
-		case "cool":
+		case sCOOL:
 			cool()
 			break
 		case "fanOnly":
@@ -1220,10 +1272,10 @@ void setAirConditionerMode(String modes){
 		case "dry":
 			modeDry()
 			break
-		case "auto":
+		case sAUTO:
 			auto()
 			break
-		case "heat":
+		case sHEAT:
 			heat()
 			break
 		case sOFF:
@@ -1243,7 +1295,7 @@ def setAirConditionerFanMode(String mode){
 		case "circulate":
 			fanCirculate()
 			break
-		case "auto":
+		case sAUTO:
 			fanAuto()
 			break
 		case "quiet":
@@ -1268,7 +1320,7 @@ def setAirConditionerFanMode(String mode){
 
 // toggle Climate React
 void toggleClimateReact(){
-	String currentClimateMode = device.currentValue("Climate")
+	String currentClimateMode = sdCV("Climate")
 
 	logTrace( "toggleClimateReact() current Climate: $currentClimateMode")
 
@@ -1290,7 +1342,7 @@ def setClimateReact(String ClimateState){
 	Boolean result = (Boolean)parent.setClimateReact(this, gtDNI(), ClimateState)
 	if(result){
 		logInfo( "Climate React changed to " + ClimateState + " for " + gtDNI())
-		sendEvent(name: 'Climate', value: ClimateState)
+		wsendEvent(name: 'Climate', value: ClimateState)
 	}else{
 		generateErrorEvent()
 	}
@@ -1300,7 +1352,7 @@ def setClimateReact(String ClimateState){
 def setClimateReactConfiguration(String on_off, String stype,ilowThres, ihighThres,String lowState,String highState){
 	///////////////////////////////////////////////
 	// on_off : enable climate react string on/off
-	// stype : possible values are "temperature", "humidity" or "feelsLike"
+	// stype : possible values are sTEMP, sHUMIDITY or "feelsLike"
 	// lowThres and highThres - number parameters (temperature or humidity)
 	// lowState and highState are json MAP: (entries can be left out if not needed)
 	//	to turn on AC:
@@ -1327,7 +1379,7 @@ def setClimateReactConfiguration(String on_off, String stype,ilowThres, ihighThr
 	Double lowThres, highThres
 	lowThres= ilowThres as Double
 	highThres= ihighThres as Double
-	if(getTemperatureScale() == "F"){
+	if(gtLtScale() == sF){
 		lowThres = fToC(lowThres).round(1)
 		highThres = fToC(highThres).round(1)
 	}
@@ -1359,7 +1411,7 @@ def setClimateReactConfiguration(String on_off, String stype,ilowThres, ihighThr
 		] */
 	}else{ highStateJson = null }
 
-	Boolean on= (on_off=='on')
+	Boolean on= (on_off==sON)
 
 	// smart_type ?
 	// low_temperature_threshold ?
@@ -1383,7 +1435,7 @@ def setClimateReactConfiguration(String on_off, String stype,ilowThres, ihighThr
 
 	if(result){
 		logInfo( "Climate React settings changed for " + gtDNI())
-		sendEvent(name: 'Climate', value: on_off)
+		wsendEvent(name: 'Climate', value: on_off)
 	}else{
 		generateErrorEvent()
 	}
@@ -1393,7 +1445,7 @@ def setClimateReactConfiguration(String on_off, String stype,ilowThres, ihighThr
 def switchFanLevel(){
 	logTrace( "switchFanLevel()")
 
-	def currentFanMode = device.currentValue("fanLevel")
+	def currentFanMode = sdCV(sFANMODE)
 	logDebug("switching fan level from current mode: $currentFanMode")
 	def returnCommand
 
@@ -1405,9 +1457,9 @@ def switchFanLevel(){
 			returnCommand = dfanLevel("high")
 			break
 		case "high":
-			returnCommand = dfanLevel("auto")
+			returnCommand = dfanLevel(sAUTO)
 			break
-		case "auto":
+		case sAUTO:
 			returnCommand = dfanLevel("quiet")
 			break
 		case "quiet":
@@ -1443,7 +1495,7 @@ String GetNextSwingMode(String swingMode, List<String>swingModes){
 void switchSwing(){
 	logTrace( "switchSwing()")
 
-	String currentMode = device.currentValue("swing")
+	String currentMode = sdCV(sSWING)
 	logDebug("switching Swing mode from current mode: $currentMode")
 
 	switch (currentMode){
@@ -1489,8 +1541,8 @@ void switchSwing(){
 def setSwingMode(String newSwing){
 	logTrace( "setSwingMode($newSwing)")
 
-	String SwingBefore = device.currentValue("swing")
-	Map capabilities = (Map)parent.getCapabilities(gtDNI(), device.currentValue("currentmode"))
+	String SwingBefore = sdCV(sSWING)
+	Map capabilities = gtCapabilities(sdCV(sCURM))
 	String Swing
 	Swing = SwingBefore
 	if(capabilities.remoteCapabilities != null){
@@ -1504,7 +1556,7 @@ def setSwingMode(String newSwing){
 		Boolean result = wsetACStates(null, null, sON, null, Swing)
 		if(result){
 			generateSwingModeEvent(Swing)
-			if(device.currentValue("switch") == sOFF){ generateSwitchEvent(sON) }
+			if(sdCV(sSW) == sOFF){ generateSwitchEvent(sON) }
 		}else{
 			generateErrorEvent()
 		}
@@ -1515,29 +1567,29 @@ def setSwingMode(String newSwing){
 }
 
 def generateSwingModeEvent(String mode){
-	String SwingBefore = device.currentValue("swing")
+	String SwingBefore = sdCV(sSWING)
 	if(SwingBefore!=mode) logInfo( "Swing mode changed to " + mode + " for " + gtDNI())
-	sendEvent(name: "swing", value: mode, descriptionText: gtDisplayName()+" swing mode is now ${mode}")
+	wsendEvent(name: sSWING, value: mode, descriptionText: gtDisplayName()+" swing mode is now ${mode}")
 }
 
 String getThermostatDescriptionText(String name, value){
-	if(name in ["temperature","targetTemperature","thermostatSetpoint","coolingSetpoint","heatingSetpoint"]){
+	if(name in [sTEMP,sTARGTEMP,sTHERMSP,sCOOLSP,sHEATSP]){
 		return "$name is $value " + gtTempUnit()
-	}else if(name == "humidity"){
+	}else if(name == sHUMIDITY){
 		return "$name is $value %"
-	}else if(name == "fanLevel"){
+	}else if(name == sFANMODE){
 		return "fan level is $value"
 	}else if(name == sON){
 		return "switch is $value"
-	}else if(name in ["mode","thermostatMode", "thermostatOperatingState","thermostatFanMode"]){
+	}else if(name in ["mode",sTHERMMODE, sTHERMOPER,sTHERMFANMODE]){
 		return "$name is ${value}"
-	}else if(name == "currentmode"){
+	}else if(name == sCURM){
 		return "thermostat mode was ${value}"
 	}else if(name == "powerSource"){
 		return "power source mode was ${value}"
 	}else if(name == "Climate"){
 		return "Climate React was ${value}"
-	}else if(name == "temperatureUnit"){
+	}else if(name == sTEMPUNIT){
 		return "thermostat unit was ${value}"
 	}else if(name == "voltage"){
 		return "Battery voltage was ${value}"
@@ -1545,7 +1597,7 @@ String getThermostatDescriptionText(String name, value){
 		return "Battery was ${value}"
 	}else if(name == "voltage" || name== "battery"){
 		return "Battery voltage was ${value}"
-	}else if(name == "swing"){
+	}else if(name == sSWING){
 		return "Swing mode was ${value}"
 	}else if(name == "Error"){
 		String str = (value == "Failed") ? "failed" : "success"
@@ -1575,44 +1627,44 @@ def parse(String description){
 
 	if(description?.startsWith("on/off:")){
 		logDebug("Switch command")
-		name = "switch"
+		name = sSW
 		value = description?.endsWith(" 1") ? sON : sOFF
-	}else if(description?.startsWith("temperature")){
+	}else if(description?.startsWith(sTEMP)){
 		logDebug("Temperature")
-		name = "temperature"
-		value = device.currentValue("temperature")
-	}else if(description?.startsWith("humidity")){
+		name = sTEMP
+		value = device.currentValue(sTEMP)
+	}else if(description?.startsWith(sHUMIDITY)){
 		logDebug("Humidity")
-		name = "humidity"
-		value = device.currentValue("humidity")
-	}else if(description?.startsWith("targetTemperature")){
-		logDebug("targetTemperature")
-		name = "targetTemperature"
-		value = device.currentValue("targetTemperature")
-	}else if(description?.startsWith("fanLevel")){
-		logDebug("fanLevel")
-		name = "fanLevel"
-		value = device.currentValue("fanLevel")
-	}else if(description?.startsWith("currentmode")){
+		name = sHUMIDITY
+		value = idCV(sHUMIDITY)
+	}else if(description?.startsWith(sTARGTEMP)){
+		logDebug(sTARGTEMP)
+		name = sTARGTEMP
+		value = idCV(sTARGTEMP)
+	}else if(description?.startsWith(sFANMODE)){
+		logDebug(sFANMODE)
+		name = sFANMODE
+		value = sdCV(sFANMODE)
+	}else if(description?.startsWith(sCURM)){
 		logDebug("mode")
-		name = "currentmode"
-		value = device.currentValue("currentmode")
+		name = sCURM
+		value = sdCV(sCURM)
 	}else if(description?.startsWith(sON)){
 		logDebug(sON)
 		name = sON
-		value = device.currentValue(sON)
-	}else if(description?.startsWith("switch")){
-		logDebug("switch")
-		name = "switch"
-		value = device.currentValue(sON)
-	}else if(description?.startsWith("temperatureUnit")){
-		logDebug("temperatureUnit")
-		name = "temperatureUnit"
+		value = sdCV(sON)
+	}else if(description?.startsWith(sSW)){
+		logDebug(sSW)
+		name = sSW
+		value = sdCV(sON)
+	}else if(description?.startsWith(sTEMPUNIT)){
+		logDebug(sTEMPUNIT)
+		name = sTEMPUNIT
 		value = gtTempUnit()
 	}else if(description?.startsWith("Error")){
 		logDebug("Error")
 		name = "Error"
-		value = device.currentValue("Error")
+		value = sdCV("Error")
 	}else if(description?.startsWith("voltage")){
 		logDebug("voltage")
 		name = "voltage"
@@ -1620,11 +1672,11 @@ def parse(String description){
 	}else if(description?.startsWith("battery")){
 		logDebug("battery")
 		name = "battery"
-		value = device.currentValue("battery")
-	}else if(description?.startsWith("swing")){
-		logDebug("swing")
-		name = "swing"
-		value = device.currentValue("swing")
+		value = idCV("battery")
+	}else if(description?.startsWith(sSWING)){
+		logDebug(sSWING)
+		name = sSWING
+		value = sdCV(sSWING)
 	}
 
 	def result = createEvent(name: name, value: value)
@@ -1685,13 +1737,14 @@ static String getObjType(obj){
 	else{ return "unknown"}
 }
 
+void wsendEvent(Map prop){ sendEvent(prop) }
 
 Boolean wsetACStates(String imode, targetTemperature, String ion, String fanLevel, String swingM){
-	String mode= imode?: device.currentValue("currentmode")
-	Integer Setpoint = targetTemperature!=null ? targetTemperature : device.currentValue("targetTemperature")
+	String mode= imode?: sdCV(sCURM)
+	Integer Setpoint = targetTemperature!=null ? targetTemperature : idCV(sTARGTEMP)
 	String on= ion ?: sON
-	String fan = fanLevel ?: device.currentValue("fanLevel")
-	String swing = swingM ?: device.currentValue("swing")
+	String fan = fanLevel ?: sdCV(sFANMODE)
+	String swing = swingM ?: sdCV(sSWING)
 
 	logDebug("Temp Unit (Setpoint) : " + Setpoint+" Temp Unit : " + gtTempUnit())
 
@@ -1706,10 +1759,21 @@ Boolean wsetACStates(String imode, targetTemperature, String ion, String fanLeve
 			gtTempUnit())
 }
 
+String gtTempUnit(){ return sdCV(sTEMPUNIT) }
+
+private Integer idCV(String a){ return device.currentValue(a).toInteger() }
+private String sdCV(String a){ return (String)device.currentValue(a) }
+String gtDisplayName(){ return (String)device.displayName }
+String gtDNI(){ return (String)device.deviceNetworkId }
+
+private Map gtCapabilities(String mode){ return  (Map)parent.getCapabilities(gtDNI(), mode) }
+
+private String gtLtScale(){ return (String)location.getTemperatureScale() }
+
 Double getThermostatResolution(){
-	return getTemperatureScale() == "C" ? 0.5D : 1.0D
+	return gtLtScale() == sC ? 0.5D : 1.0D
 }
 
 def roundDegrees(Double value){
-	return getTemperatureScale() == "C" ? Math.round(value * 2.0D) / 2.0D : Math.round(value)
+	return gtLtScale() == sC ? Math.round(value * 2.0D) / 2.0D : Math.round(value)
 }
