@@ -245,6 +245,13 @@ def initialize(){
 	logTrace( "initialize() called")
 	//logTrace( "key "+ getApiKey())
 
+    // Tidy up states left behind by previous version
+    if(state.apikey) { state.remove("apikey") }
+    if(state.lastPollCapabilitiesMillis) { state.remove("lastPollCapabilitiesMillis") }
+    if(state.lastPollMillis) { state.remove("lastPollMillis") }
+    if(state.capabilities) { state.remove("capabilities") }
+    if(state.sensibo) { state.remove("sensibo") }
+
 	List devices= ((List)SelectedSensiboPods).collect{ dni ->
 		logDebug("Initializing " + dni)
 		def d

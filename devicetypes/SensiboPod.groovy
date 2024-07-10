@@ -312,6 +312,11 @@ def heat(){
 	modeMode(sHEAT)
 }
 
+def emergencyHeat(){		// emergency heat not a supported function for Sensibo so use regular heat
+	logTrace( "emergencyHeat()")
+	modeMode(sHEAT)
+}
+
 def cool(){
 	logTrace( "cool()")
 	modeMode(sCOOL)
