@@ -1,16 +1,16 @@
 {
   "packageName": "Sensibo Integration",
   "author": "Paul Hutton",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "minimumHEVersion": "2.2.5",
   "dateReleased": "2024-07-10",
-  "releaseNotes": "Small improvement to add the regular heat function behind standard Emergency Heat thermostat option (unsupported by Sensibo) and clean up state variables in the app",
+  "releaseNotes": "Improvements to backwards compatibility with previous versions\n \nIMPORTANT: Version 0.2 reintroduces the thermostat function (thanks to some fine work from nh.schottfam). Upgrades from version 0.1 should take into account the following manual actions:\n  - to use the Thermostat features in dashboards you should either:\n    -- recreate the sensibo pod devices using the app: remove and then readd (stable option but breaks rules so please ensure that you have a copy of rules before performing this step), OR\n    -- uncomment the line capability 'Initialize' in the driver code, restart your hub and then comment out the line again (developer option - USE AT OWN RISK)\n  - any rules using the modeCool custom command should be changed to use the Cool custom command",
   "apps": [
     {
       "id": "5c8e11e5-81ff-451f-b83e-5218914478e5",
       "name": "Sensibo Integration",
       "namespace": "velowulf",
-      "location": "https://raw.githubusercontent.com/VeloWulf/SensiboIntegration/0.2.1/smartapps/SensiboIntegration.groovy",
+      "location": "https://raw.githubusercontent.com/VeloWulf/SensiboIntegration/0.2.2/smartapps/SensiboIntegration.groovy",
       "required": true,
       "oauth": false,
       "primary": false
@@ -21,7 +21,7 @@
       "id": "02c568f2-be07-4e51-917f-377b22a4fd62",
       "name": "SensiboPod",
       "namespace": "velowulf",
-      "location": "https://raw.githubusercontent.com/VeloWulf/SensiboIntegration/0.2.1/devicetypes/SensiboPod.groovy",
+      "location": "https://raw.githubusercontent.com/VeloWulf/SensiboIntegration/0.2.2/devicetypes/SensiboPod.groovy",
       "required": true
     }
   ]

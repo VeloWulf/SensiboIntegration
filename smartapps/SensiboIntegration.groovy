@@ -1298,11 +1298,12 @@ def OnOffHandler(evt){
 	}
 } */
 
-
+/*
 public void enableDebugLog(){ app.updateSetting("logDebug",[value:sTRUE,type:"bool"]); logInfo("Debug Logs Enabled From Main App...") }
 public void disableDebugLog(){ app.updateSetting("logDebug",[value:sFALSE,type:"bool"]); logInfo("Debug Logs Disabled From Main App...") }
 public void enableTraceLog(){ app.updateSetting("logTrace",[value:sTRUE,type:"bool"]); logInfo("Trace Logs Enabled From Main App...") }
 public void disableTraceLog(){ app.updateSetting("logTrace",[value:sFALSE,type:"bool"]); logInfo("Trace Logs Disabled From Main App...") }
+*/
 
 private void logDebug(String msg){ if((Boolean)settings.logDebug) { log.debug logPrefix(msg, "purple") } }
 private void logInfo(String msg){ if((Boolean)settings.logInfo != false) { log.info logPrefix(msg, "#0299b1") } }

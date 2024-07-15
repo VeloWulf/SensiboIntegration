@@ -46,6 +46,7 @@ preferences{
 metadata{
 	definition (name: "SensiboPod", namespace: "velowulf", author: "Paul Hutton", oauth: false){
 		// capability "Actuator"
+		// capability "Initialize"
 		capability "Battery"
 		capability "Health Check"
 		capability "Polling"
@@ -104,7 +105,9 @@ metadata{
 						sAUTO,
 						"quiet",
 						"low",
+						"mediumLow",
 						"medium",
+						"mediumHigh",
 						"high",
 						"strong" ]
 				]
@@ -116,7 +119,7 @@ metadata{
 		command "setMaxHeatTemp", [[ name: "temperature*", type: "NUMBER"]]
 		command "resetMinMax"
 
-		// command "switchFanLevel"
+		//command "switchFanLevel"
 		//command "switchMode"
 		//command "raiseCoolSetpoint"
 		//command "lowerCoolSetpoint"
@@ -145,7 +148,9 @@ metadata{
 		command "modeDry"
 		command "modeFan"
 		command "fanLow"
+		command "fanMediumLow"
 		command "fanMedium"
+		command "fanMediumHigh"
 		command "fanHigh"
 		command "fanQuiet"
 		command "fanStrong"
@@ -168,7 +173,9 @@ metadata{
 						sAUTO,
 						"quiet",
 						"low",
+						"mediumLow",
 						"medium",
+						"mediumHigh",
 						"high",
 						"strong" ]
 				]
@@ -231,6 +238,24 @@ metadata{
 
 def installed(){
 	logTrace("installed")
+	initialize()
+}
+
+def updated(){
+	logTrace("updated")
+	//if(advLogsActive()){ runIn(1800, "logsOff") }
+	if(advLogsActive()){ runIn(28800, "logsOff") }
+}
+
+Boolean advLogsActive(){ return ((Boolean)settings.logDebug || (Boolean)settings.logTrace) }
+void logsOff(){
+	device.updateSetting("logDebug",[value:sFALSE,type:"bool"])
+	device.updateSetting("logTrace",[value:sFALSE,type:"bool"])
+	log.debug "Disabling debug logs"
+}
+
+def initialize(){
+	logTrace("initialize")
 	// Let's just set a few things before starting
 	String hubScale= gtLtScale()
 
@@ -272,7 +297,7 @@ def installed(){
 	wsendEvent(name: sTHERMFANMODE, value: sAUTO)
 	wsendEvent(name: sTHERMMODE, value: sOFF)
 	wsendEvent(name: sTHERMOPER, value: "idle")
-	wsendEvent(name: "supportedThermostatModes", value: [sHEAT, sCOOL, sAUTO, sOFF])
+	wsendEvent(name: "supportedThermostatModes", value: [sHEAT, sCOOL, sAUTO, "dry", "fan", sOFF])
 	wsendEvent(name: 'supportedThermostatFanModes', value: [sON, "circulate", sAUTO])
 //	wsendEvent(name: "maxUpdateInterval", value: 65)
 //	wsendEvent(name: "lastTempUpdate", value: new Date() )
@@ -283,21 +308,6 @@ def installed(){
 	wsendEvent(name: sCURM, value: sOFF)
 	wsendEvent(name: 'airConditionerMode', value: sOFF)
 }
-
-def updated(){
-	logTrace("updated")
-	//if(advLogsActive()){ runIn(1800, "logsOff") }
-	if(advLogsActive()){ runIn(28800, "logsOff") }
-}
-
-Boolean advLogsActive(){ return ((Boolean)settings.logDebug || (Boolean)settings.logTrace) }
-void logsOff(){
-	device.updateSetting("logDebug",[value:sFALSE,type:"bool"])
-	device.updateSetting("logTrace",[value:sFALSE,type:"bool"])
-	log.debug "Disabling debug logs"
-}
-
-
 
 
 // Standard thermostat commands
@@ -367,12 +377,12 @@ def setThermostatMode(mode){
 		case sCOOL:
 			cool()
 			break
-			//case "fan":
-			//	returnCommand = modeFan()
-			//	break
-			//case "dry":
-			//	returnCommand = modeDry()
-			//	break
+		//case "fan":		// not modes supported by the standard hubitat thermostat object
+		//	modeFan()		// TO DO create a setThermostatMode command with updated ENUM list to see if it overwrites
+		//	break
+		//case "dry":
+		//	modeDry()
+		//	break
 		case sAUTO:
 			auto()
 			break
@@ -468,11 +478,20 @@ def fanLow(){
 	dfanLevel("low")
 }
 
+def fanMediumLow(){
+	logTrace( "fanMediumLow()")
+	dfanLevel("medium_low")
+}
+
 def fanMedium(){
 	logTrace( "fanMedium()")
 	dfanLevel("medium")
 }
 
+def fanMediumHigh(){
+	logTrace( "fanMediumHigh()")
+	dfanLevel("medium_high")
+}
 def fanHigh(){
 	logTrace( "fanHigh()")
 	dfanLevel("high")
@@ -1270,7 +1289,6 @@ void setAirConditionerMode(String modes){
 		case sCOOL:
 			cool()
 			break
-		case "fanOnly":
 		case "fan":
 			modeFan()
 			break
@@ -1309,8 +1327,14 @@ def setAirConditionerFanMode(String mode){
 		case "low":
 			fanLow()
 			break
+		case "mediumLow":
+			fanMediumLow()
+			break
 		case "medium":
 			fanMedium()
+			break
+		case "mediumHigh":
+			fanMediumHigh()
 			break
 		case "high":
 			fanHigh()
