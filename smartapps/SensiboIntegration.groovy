@@ -1123,7 +1123,7 @@ Map getCapabilities(String PodUid, String mode){
 		}
 	}
 	if(svData){
-		//logDebug("getCapabilities ${svData}")
+		logDebug("getCapabilities ${svData}")
 
 		data.productModel= (String)sensiboCAPMapFLD[PodUid].productModel
 		switch (mode){

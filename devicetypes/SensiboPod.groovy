@@ -15,6 +15,7 @@
  *  Date		Comments
  *  2021-02-15	Forked from Bryan Li's port from ST
  *  2024-03-27	Significant updates, support thermostat capabilities
+ *  2024-07-16  Improved backwards compatibility and added supported modes and fan levels for dashboards
  *
  */
 
@@ -243,6 +244,8 @@ def installed(){
 
 def updated(){
 	logTrace("updated")
+	wsendEvent(name: "supportedThermostatModes", value: [gtSupportedModes()])
+	wsendEvent(name: 'supportedThermostatFanModes', value: [gtSupportedFanModes()])
 	//if(advLogsActive()){ runIn(1800, "logsOff") }
 	if(advLogsActive()){ runIn(28800, "logsOff") }
 }
@@ -297,8 +300,8 @@ def initialize(){
 	wsendEvent(name: sTHERMFANMODE, value: sAUTO)
 	wsendEvent(name: sTHERMMODE, value: sOFF)
 	wsendEvent(name: sTHERMOPER, value: "idle")
-	wsendEvent(name: "supportedThermostatModes", value: [sHEAT, sCOOL, sAUTO, "dry", "fan", sOFF])
-	wsendEvent(name: 'supportedThermostatFanModes', value: [sON, "circulate", sAUTO])
+	wsendEvent(name: "supportedThermostatModes", value: [gtSupportedModes()])
+	wsendEvent(name: 'supportedThermostatFanModes', value: [gtSupportedFanModes()])
 //	wsendEvent(name: "maxUpdateInterval", value: 65)
 //	wsendEvent(name: "lastTempUpdate", value: new Date() )
 
@@ -618,7 +621,7 @@ void modeMode(String newMode){
 		if(capabilities.remoteCapabilities != null){
 			// see if fan level exists
 			List<String> fanLevels = ((Map<String,List>)capabilities.remoteCapabilities).fanLevels
-			//logDebug("Fan levels capabilities : " + fanLevels)
+			logDebug("Fan levels capabilities : " + fanLevels)
 			if(!(Level in fanLevels)){
 				Level = GetNextFanLevel(LevelBefore,fanLevels)
 				logWarn("Changing Fan : " + Level)
@@ -696,7 +699,7 @@ String GetNextFanLevel(String fanLevel, List<String>fanLevels){
 
 	if(!fanLevels) return null
 
-	List<String> listFanLevel = ['low','medium','high',sAUTO,'quiet','medium_high','medium_low','strong']
+	List<String> listFanLevel = ['quiet','low','medium_low','medium','medium_high','high',sAUTO,'strong']
 	String newFanLevel = returnNext(listFanLevel,fanLevels,fanLevel)
 
 	logDebug("Next fanLevel = " + newFanLevel)
@@ -1805,4 +1808,33 @@ Double getThermostatResolution(){
 
 def roundDegrees(Double value){
 	return gtLtScale() == sC ? Math.round(value * 2.0D) / 2.0D : Math.round(value)
+}
+
+private String gtSupportedModes(){
+	logTrace("gtSupportedModes called")
+	Map<String,Map> themodes = gtCapabilities("modes")
+	String sModes; sModes=""
+	themodes.remoteCapabilities.each{
+		sModes = sModes+it.key+", "
+	}
+	sModes = sModes+sOFF
+	logDebug("Returned modes: "+sModes)
+	return sModes
+}
+
+private String gtSupportedFanModes(){		// uses the auto mode returned as the basis for the all the modes
+	logTrace("gtSupportedFanModes called")
+	Map<String,Map> capabilities = gtCapabilities("auto")
+	String sFanModes; sFanModes=""
+	if(capabilities.remoteCapabilities != null){
+		// see if fan level exists
+		List<String> fanLevels = ((Map<String,List>)capabilities.remoteCapabilities).fanLevels
+		logDebug("Fan levels capabilities : " + fanLevels)
+		sFanModes = fanLevels.join(", ")		
+	}else{
+		logWarn("No fan levels returned. Using defaults")
+		sFanModes = sON+", circulate, "+sAUTO
+	}
+	logDebug("Returned modes: "+sFanModes)
+	return sFanModes
 }
