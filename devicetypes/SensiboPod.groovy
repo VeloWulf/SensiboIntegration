@@ -16,6 +16,7 @@
  *  2021-02-15	Forked from Bryan Li's port from ST
  *  2024-03-27	Significant updates, support thermostat capabilities
  *  2024-07-16  Improved backwards compatibility and added supported modes and fan levels for dashboards
+ *  2024-08-14  Added non-standard modes and fan levels to function with dashboards (colour coding will not work but functions will)
  *
  */
 
