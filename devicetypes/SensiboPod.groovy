@@ -16,7 +16,6 @@
  *  2021-02-15	Forked from Bryan Li's port from ST
  *  2024-03-27	Significant updates, support thermostat capabilities
  *  2024-07-16  Improved backwards compatibility and added supported modes and fan levels for dashboards
- *  2024-08-14  Added non-standard modes to Thermostat Operating Modes (won't colour the dashboard tiles but will function)
  *
  */
 
@@ -167,7 +166,7 @@ metadata{
 						sOFF ]
 				]
 		]
-		
+
 		command "setAirConditionerFanMode", [
 				[ name:"State*", type: "ENUM", constraints: [
 						sON,
@@ -402,8 +401,8 @@ def setThermostatMode(mode){
 		case sCOOL:
 			cool()
 			break
-		case "fan":		
-			modeFan()		
+		case "fan":
+			modeFan()
 			break
 		case "dry":
 			modeDry()
@@ -1860,6 +1859,6 @@ private String gtSupportedFanModes(){		// uses the auto mode returned as the bas
 		logWarn("No fan levels returned. Using defaults")
 		sFanModes = sON+", circulate, "+sAUTO
 	}
-	logDebug("Returned fan modes: "+sFanModes)
+	logDebug("Returned modes: "+sFanModes)
 	return sFanModes
 }
