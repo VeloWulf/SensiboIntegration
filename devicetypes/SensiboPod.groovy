@@ -16,6 +16,7 @@
  *  2021-02-15	Forked from Bryan Li's port from ST
  *  2024-03-27	Significant updates, support thermostat capabilities
  *  2024-07-16  Improved backwards compatibility and added supported modes and fan levels for dashboards
+ *  2024-08-14  Added non-standard modes to Thermostat Operating Modes (won't colour the dashboard tiles but will function)
  *
  */
 
@@ -166,7 +167,7 @@ metadata{
 						sOFF ]
 				]
 		]
-
+		
 		command "setAirConditionerFanMode", [
 				[ name:"State*", type: "ENUM", constraints: [
 						sON,
@@ -367,6 +368,27 @@ def setThermostatFanMode(String mode){
 		case sAUTO:
 			fanAuto()
 			break
+		case "quiet":
+			fanQuiet()
+			break
+		case "low":
+			fanLow()
+			break
+		case "mediumLow":
+			fanMediumLow()
+			break
+		case "medium":
+			fanMedium()
+			break
+		case "mediumHigh":
+			fanMediumHigh()
+			break
+		case "high":
+			fanHigh()
+			break
+		case "strong":
+			fanStrong()
+			break
 		default:
 			generateErrorEvent()
 	}
@@ -380,12 +402,12 @@ def setThermostatMode(mode){
 		case sCOOL:
 			cool()
 			break
-		//case "fan":		// not modes supported by the standard hubitat thermostat object
-		//	modeFan()		// TO DO create a setThermostatMode command with updated ENUM list to see if it overwrites
-		//	break
-		//case "dry":
-		//	modeDry()
-		//	break
+		case "fan":		
+			modeFan()		
+			break
+		case "dry":
+			modeDry()
+			break
 		case sAUTO:
 			auto()
 			break
@@ -520,9 +542,9 @@ def generatefanLevelEvent(String Level){
 	wsendEvent(name: 'airConditionerFanMode', value: Level)
 	String mode
 	mode = Level
-	mode = (mode in ["high", "medium", "strong"]) ? sON : mode
+/*	mode = (mode in ["high", "medium", "mediumLow", "mediumHigh", "strong"]) ? sON : mode
 	mode = (mode in ["low", "quiet"]) ? "circulate" : mode
-	mode = !(mode in [sON, "circulate"]) ? sAUTO : mode
+	mode = !(mode in [sON, "circulate"]) ? sAUTO : mode*/
 	wsendEvent(name: 'thermostatFanMode', value: mode)
 }
 
@@ -531,19 +553,22 @@ void generateModeEvent(String mode, Boolean doSW=true){
 	wsendEvent(name: 'airConditionerMode', value: mode)
 
 	String m
-	if(mode in [sHEAT,sCOOL,sAUTO,sOFF])
+	if(mode in [sHEAT,sCOOL,sAUTO,"dry","fan",sOFF])
 		m= mode
-	else if(mode in ["dry"]) {
+	/*else if(mode in ["dry"]) {		//non-standard
 		m= sCOOL
-	}else // 'fan'
+	}*/
+	else // 'fan'
 		m= sOFF
 	wsendEvent(name: sTHERMMODE, value: m, descriptionText: "AC mode is now ${m}")
 
 	m= sBLANK
-	if(mode in [sCOOL,"dry"]){
+	if(mode == [sCOOL,sAUTO]){
 		m= 'cooling'
-	}else if(mode in [sHEAT,sAUTO]){
+	}else if(mode == sHEAT){
 		m= 'heating'
+    }else if(mode == "dry"){
+		m= 'drying'
 	}else if(mode=="fan"){
 		m= 'fan only'
 	}else{
@@ -1835,6 +1860,6 @@ private String gtSupportedFanModes(){		// uses the auto mode returned as the bas
 		logWarn("No fan levels returned. Using defaults")
 		sFanModes = sON+", circulate, "+sAUTO
 	}
-	logDebug("Returned modes: "+sFanModes)
+	logDebug("Returned fan modes: "+sFanModes)
 	return sFanModes
 }
