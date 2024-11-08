@@ -560,10 +560,11 @@ void generateModeEvent(String mode, Boolean doSW=true){
 	}*/
 	else // 'fan'
 		m= sOFF
+	
 	wsendEvent(name: sTHERMMODE, value: m, descriptionText: "AC mode is now ${m}")
 
 	m= sBLANK
-	if(mode == [sCOOL,sAUTO]){
+	if(mode in [sCOOL,sAUTO]){
 		m= 'cooling'
 	}else if(mode == sHEAT){
 		m= 'heating'
