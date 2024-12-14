@@ -820,6 +820,8 @@ def parseEventData(Map<String,Object> results){
 						break
 					case sTHERMFANMODE:
 					case sFANMODE:
+						// some ac units don't have fan levels for some modes so use auto as a default if the value is returned as null
+						if(value == null) value = "auto"
 						generatefanLevelEvent(value as String)
 						doit= false
 						break
@@ -1848,9 +1850,9 @@ private String gtSupportedModes(){
 	return sModes
 }
 
-private String gtSupportedFanModes(){		// uses the auto mode returned as the basis for the all the modes
+private String gtSupportedFanModes(String mode = "auto"){		// uses the auto mode returned as the basis for the all the modes
 	logTrace("gtSupportedFanModes called")
-	Map<String,Map> capabilities = gtCapabilities("auto")
+	Map<String,Map> capabilities = gtCapabilities(mode)
 	String sFanModes; sFanModes=""
 	if(capabilities.remoteCapabilities != null){
 		// see if fan level exists
