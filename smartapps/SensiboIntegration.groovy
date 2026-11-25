@@ -16,6 +16,23 @@
  *  2021-02-15	Forked from Bryan Li's port from ST
  *  2021-02-28	Resolved old namespace issue (thanks benmek)
  *  2024-03-27	Significant updates, support thermostat capabilities
+ *  2026-11-25	nh.schottfam - Sensibo API:
+ *				  - API key sent in the X-Api-Key header (was in the URL); key no longer written to logs
+ *				  - routine polls request only the fields used; capabilities fetched at most every 6 hours
+ *				  - HTTP 429 (rate limit) pauses polling with an increasing back-off (5 to 30 minutes)
+ *				  - single-value changes use PATCH acStates/{property}, so other settings aren't overwritten
+ *				  - refresh interval options 5/10/15/30 minutes (1 minute removed), default 10
+ *				Real-time updates (optional): Sensibo event stream via the new "Sensibo Event Stream" driver;
+ *				  measurements and changes update devices within seconds, full polls every 15+ minutes
+ *				Fixes:
+ *				  - Climate React on/off and configuration no longer reported as failed when they succeeded;
+ *				    "on" before Climate React is configured reports failure instead of doing nothing
+ *				  - pod list cached for 5 minutes (was 300 ms); no crash setting up a pod that isn't found
+ *				  - null checks in capabilities and Climate React; async responses checked before use
+ *				  - fallback setpoint converted to F; missing measurements left out (were reported as 0)
+ *				  - an offline pod is reported as unavailable (was stale data) without a full fetch every poll
+ *				  - shared caches thread-safe; deselected or deleted pods dropped from the caches
+ *				  - refresh() only replaces the poll schedule; ping() only succeeds on HTTP 200; battery thresholds
  */
 
 //file:noinspection GroovySillyAssignment
@@ -39,6 +56,7 @@ definition(
 	namespace: "velowulf",
 	author: "Paul Hutton",
 	description: "Connect your Sensibo Pod to Hubitat.",
+	menu: "Integrations",
 	category: "Green Living",
 	iconUrl: "", // empty string - not implemented in Hubitat
 	iconX2Url: "", // empty string - not implemented in Hubitat
@@ -57,6 +75,9 @@ preferences{
 static String getServerUrl(){ return 'https://home.sensibo.com' }
 static String getChildNamespace(){ return 'velowulf' }
 static String getChildTypeName(){ return 'SensiboPod' }
+@Field static final String sSTREAMDNI = 'sensibo-event-stream'
+@Field static final String sSTREAMTYPE = 'Sensibo Event Stream'
+Boolean streamEnabled(){ return (Boolean)settings.useStream == true }
 String getApiKey(){ return (String)settings.apiKey }
 //static Long getPollRateMillis(){ return 45000L }
 //static Long getCapabilitiesRateMillis(){ return 600000L }
@@ -125,7 +146,11 @@ def SensiboPodList()
 		}
 
 		section("Refresh"){
-			input(name:"refreshinminutes", title: "Refresh rates in minutes", type: "enum", required:false, multiple: false, options: ["1", "5", "10","15","30"])
+			input(name:"refreshinminutes", title: "Refresh rates in minutes (Sensibo rate-limits frequent polling)", type: "enum", required:false, multiple: false, options: ["5", "10","15","30"], defaultValue: "10")
+			input(name:"useStream", type: "bool", required: false, defaultValue: false,
+				title: "Real-time updates (Sensibo event stream)",
+				description: "Changes show up within seconds and full polls drop to every 15+ minutes. Needs the 'Sensibo Event Stream' driver installed.")
+			if(streamEnabled()) paragraph streamStatusText()
 		}
 
 		/*
@@ -180,9 +205,12 @@ def timePageEvent(){
 }
 */
 
+// settings without the API key, for logging
+Map safeSettings(){ return ((Map)settings).findAll{ it.key != 'apiKey' } }
+
 // Function that runs when the app is first installed
 def installed(){
-	logTrace( "Installed() called with settings: ${settings}")
+	logTrace( "Installed() called with settings: ${safeSettings()}")
 
 	initialize()
 
@@ -206,7 +234,7 @@ def installed(){
 
 // Function that runs when the app is updated
 def updated(){
-	logTrace( "Updated() called with settings: ${settings}")
+	logTrace( "Updated() called with settings: ${safeSettings()}")
 
 	unschedule() // Remove any scheduled tasks. If method is called without parameters, all schedules will be removed.
 	unsubscribe() // Unsubscribe from events sent from a device or all event subscriptions.
@@ -237,7 +265,7 @@ def updated(){
 // Function that runs when the app is removed (uninstalled)
 def uninstalled(){
 	// remove child devices
-	logTrace "Uninstalled called with settings: ${settings}"
+	logTrace "Uninstalled called with settings: ${safeSettings()}"
 }
 
 
@@ -252,13 +280,19 @@ def initialize(){
     if(state.capabilities) { state.remove("capabilities") }
     if(state.sensibo) { state.remove("sensibo") }
 
+	Map<String,String> podList; podList= null	// fetched once, only if a device needs creating
 	List devices= ((List)SelectedSensiboPods).collect{ dni ->
 		logDebug("Initializing " + dni)
 		def d
 		d= getChildDevice(dni) // grab child devices with the current collection entry
 
 		if(!d){ // the return is empty so no device exists in which case add it
-			Map.Entry<String,String> name= getSensiboPodList().find( {key,value -> key == dni })
+			if(podList == null) podList= getSensiboPodList() ?: [:]
+			Map.Entry<String,String> name= podList.find( {key,value -> key == dni })
+			if(!name){
+				logWarn("Pod $dni not found in the Sensibo account (or the API call failed); not creating its device")
+				return null
+			}
 
 			logDebug( "Pod : ${name.value} - Hub : ${(String)((List)location.hubs)[iZ].name} - Type : " + getChildTypeName() + " - Namespace : " + getChildNamespace())
 
@@ -274,22 +308,19 @@ def initialize(){
 		}
 
 		return d
-	}
+	}.findAll{ it != null }
 
 	logTrace( "found / created ${devices.size()} Sensibo Pod")
 
 	List delete
 	// Delete any that are no longer selected
-	if(!(List)SelectedSensiboPods){
-		logDebug( "Removing all Sensibo devices")
-		delete= getChildDevices()
-	}else{
-		delete= getChildDevices().findAll { !((List)SelectedSensiboPods).contains(it.deviceNetworkId) }
-	}
+	List<String> keep= ((List)SelectedSensiboPods ?: []).collect{ it as String }
+	delete= getChildDevices().findAll { it.deviceNetworkId != sSTREAMDNI && !keep.contains(it.deviceNetworkId) }	// the stream device isn't a pod
 
 	logTrace( "deleting ${delete.size()} Sensibo")
 	delete.each { deleteChildDevice(it.deviceNetworkId) }
 
+	manageStreamDevice()
 	resetSchedule()
 	//if(advLogsActive()){ runIn(1800, "logsOff") }
 	if(advLogsActive()){ runIn(28800, "logsOff") }
@@ -306,12 +337,20 @@ void logsOff(){
 
 void resetSchedule(){
 	logTrace("resetSchedule()")
+	unschedule('refreshDevices')	// replace, not add to, the current schedule
 	//Set up schedule for refreshing devices based on app preferences
 	String rfmins=(String)settings.refreshinminutes
 	logTrace( "refresh() called with rate of " + rfmins + " minutes")
-	if(rfmins == "1")
-		runEvery1Minute("refreshDevices")
-	else if(rfmins == "5")
+	if(streamUpFLD){
+		// with the event stream open, Sensibo asks for a full poll only every 15 minutes or more
+		if(rfmins == "30") runEvery30Minutes("refreshDevices")
+		else runEvery15Minutes("refreshDevices")
+		return
+	}
+	if(rfmins == "1"){	// no longer offered: Sensibo rate-limits polling
+		logWarn("1 minute refresh is no longer supported; using 5 minutes")
+		runEvery5Minutes("refreshDevices")
+	}else if(rfmins == "5")
 		runEvery5Minutes("refreshDevices")
 	else if(rfmins == "10")
 		runEvery10Minutes("refreshDevices")
@@ -329,10 +368,11 @@ Map<String,Object> restParams(String path, Map queryMap, Boolean intr=true, Stri
 	res=[
 		uri: "${getServerUrl()}",
 		path: path,
-		query: [apiKey: getApiKey(), type:"json"] + (intr ? [integration: version()] : [:]) + queryMap
+		query: [type:"json"] + (intr ? [integration: version()] : [:]) + queryMap,
+		// Sensibo recommends the header over ?apiKey=; it also keeps the key out of request URLs
+		headers: ["X-Api-Key": getApiKey()] + (headers ? ["Content-Type": sAPPJSON] : [:])
 	]
-	if(headers) res= res + [headers: ["Content-Type": sAPPJSON]]
-	else res= res + [requestContentType: sAPPJSON]
+	if(!headers) res= res + [requestContentType: sAPPJSON]
 	if(jsonBody) res= res + [body: jsonBody]
 	res
 }
@@ -340,9 +380,46 @@ Map<String,Object> restParams(String path, Map queryMap, Boolean intr=true, Stri
 
 private Long wnow(){ return (Long)now() }
 
+// Polling: routine polls ask only for the fields used; the large remoteCapabilities is fetched at most every 6 hours
+// (or when missing / when the pod list is wanted). HTTP 429 pauses polling with an increasing back-off.
+@Field static final String sPOLLFIELDS = 'id,room,temperatureUnit,connectionStatus,acState,measurements,smartMode,productModel,firmwareVersion,location,filtersCleaning'
+@Field static final Long lCAPSMAXAGE = 21600000L		// 6 hours
+@Field static final Long lBACKOFFMIN = 300000L		// 5 minutes
+@Field static final Long lBACKOFFMAX = 1800000L		// 30 minutes
+@Field volatile static Long sensiboCapsLongFLD= 0L
+@Field volatile static Long sensiboBackoffUntilFLD= 0L
+@Field volatile static Long sensiboBackoffMsFLD= 0L
+
+private String pollFields(Boolean full){
+	Boolean capsStale= sensiboCAPMapFLD.isEmpty() || wnow() > (sensiboCapsLongFLD + lCAPSMAXAGE)
+	return (full || capsStale) ? "*" : sPOLLFIELDS
+}
+
+private Boolean inBackoff(){ return wnow() < sensiboBackoffUntilFLD }
+
+private void noteRateLimited(){
+	Long b= sensiboBackoffMsFLD ? Math.min(sensiboBackoffMsFLD * 2L, lBACKOFFMAX) : lBACKOFFMIN
+	sensiboBackoffMsFLD= b
+	sensiboBackoffUntilFLD= wnow() + b
+	logWarn("Sensibo rate limit reached (HTTP 429); pausing polls for ${(b / 60000L)} minutes")
+}
+
+private void noteRequestOk(){ sensiboBackoffMsFLD= 0L }
+
+// status code of a failed synchronous request (Hubitat throws for non-2xx responses), or null
+private static Integer errStatus(e){
+	try{ return e?.statusCode as Integer }catch(ignored){ return null }
+}
+
+private void noteError(e){ if(errStatus(e) == 429) noteRateLimited() }
+
 void asyncReq(String callBack, Boolean doPod=false){
 	logTrace( "asyncReq")
-	Map deviceListParams= restParams('/api/v2/users/me/pods', [fields:"*"],true)
+	if(inBackoff()){
+		logDebug("asyncReq skipped: backing off after a Sensibo rate limit")
+		return
+	}
+	Map deviceListParams= restParams('/api/v2/users/me/pods', [fields: pollFields(doPod)],true)
 	logDebug( "HTTP REQUEST ASYNC asyncReq")
 	try {
 		asynchttpGet('ahttpReqResp', deviceListParams, [command: callBack, doPod: doPod])
@@ -368,22 +445,46 @@ void ahttpReqResp(resp, Map callbackData){
 	}
 	Boolean respOk=(rCode>=i200 && rCode<i300)
 	Boolean respRedir=(rCode>=i300 && rCode<i400)
+	if(rCode == 429) noteRateLimited()
 	if(respOk){
-		String sdata; sdata= resp.data
+		noteRequestOk()
+		try{
+			String sdata; sdata= resp.data
+			if(!sdata){
+				logWarn("ahttpReqResp: empty response from Sensibo")
+				return
+			}
+			Map data= (Map)new JsonSlurper().parseText(sdata)
+			if(data?.status && (String)data.status != "success"){
+				logWarn("ahttpReqResp: Sensibo returned status ${data.status}")
+				return
+			}
+			List<Map> res= (List<Map>)data?.result
+			if(res == null){
+				logWarn("ahttpReqResp: no pod list in Sensibo response")
+				return
+			}
+			fillFields(res,doPod)
+			sensiboLastFullFLD= wnow()
 
-		Map data= new JsonSlurper().parseText(sdata)
-		List<Map> res= (List<Map>)data.result
-		fillFields(res,doPod)
-
-		"$callBackC"()
+			if(callBackC) "$callBackC"()
+		}catch(Exception e){
+			logError("ahttpReqResp: could not process Sensibo response", e)	// e.g. HTML error page or truncated JSON
+		}
+	}else if(!respRedir){
+		logWarn("ahttpReqResp: refresh failed (HTTP ${rCode}); devices keep their last values")
 	}
 	logTrace( "attpReqResp done")
 }
 
-List<Map> syncReq(){
-	logTrace( "syncReq")
+List<Map> syncReq(String fields="*"){
+	logTrace( "syncReq($fields)")
+	if(inBackoff()){
+		logDebug("syncReq skipped: backing off after a Sensibo rate limit")
+		return null
+	}
 
-	Map deviceListParams= restParams('/api/v2/users/me/pods', [fields:"*"],true)
+	Map deviceListParams= restParams('/api/v2/users/me/pods', [fields: fields],true)
 
 	List<Map> res; res=null
 	try {
@@ -391,10 +492,12 @@ List<Map> syncReq(){
 		httpGet(deviceListParams){ resp ->
 			if(resp.status == i200){
 				res= (List<Map>)resp.data.result
+				noteRequestOk()
 			}
 		}
 		return res
 	}catch(e){
+		noteError(e)
 		logError( "Exception syncReq: ", e)
 	}
 	return null
@@ -402,16 +505,28 @@ List<Map> syncReq(){
 
 @Field volatile static Long sensiboPodsLongFLD= 0L
 
-@Field volatile static Map<String,Map> sensiboMapFLD     = [:]
-@Field volatile static Map<String, Map<String,Map>> sensiboDeviceMapFLD     = [:]
-@Field volatile static Map<String, Long> sensiboDeviceLongFLD     = [:]
-@Field volatile static Map<String, Map<String,Map>> sensiboClimateMapFLD = [:]
-@Field volatile static Map<String, Map<String,Map>> sensiboCAPMapFLD = [:]
+// Shared caches, keyed by pod id. They are read and written by the async poll handler and by device commands on
+// other threads, so the outer maps are ConcurrentHashMaps (no ConcurrentModificationException; note they can't hold
+// null values) and cached entries are never changed in place: updateDeviceCache() swaps in an updated copy.
+@Field volatile static Map<String,Map> sensiboMapFLD     = new java.util.concurrent.ConcurrentHashMap()
+@Field volatile static Map<String, Map<String,Map>> sensiboDeviceMapFLD     = new java.util.concurrent.ConcurrentHashMap()
+@Field volatile static Map<String, Long> sensiboDeviceLongFLD     = new java.util.concurrent.ConcurrentHashMap()
+@Field volatile static Map<String, Map<String,Map>> sensiboClimateMapFLD = new java.util.concurrent.ConcurrentHashMap()
+@Field volatile static Map<String, Map<String,Map>> sensiboCAPMapFLD = new java.util.concurrent.ConcurrentHashMap()
+
+// replace a device's cached entry with an updated copy, so a map another thread is reading is never changed
+private void updateDeviceCache(String dni, Closure upd){
+	Map old= sensiboDeviceMapFLD[dni]
+	if(old == null) return
+	Map t= new LinkedHashMap(old)
+	upd(t)
+	sensiboDeviceMapFLD[dni]= t
+}
 
 void fillFields(List<Map> res, Boolean doPod=false){
 	logDebug("fillFields($doPod) ")
 	Map<String, String> pods= [:]
-	Map<String, Map> fullPods= [:]
+	Map<String, Map> fullPods= new java.util.concurrent.ConcurrentHashMap()
 	res.each { pod ->
 		String key= (String)pod.id
 		String value= (String) ((Map)pod.room).name
@@ -428,13 +543,22 @@ void fillFields(List<Map> res, Boolean doPod=false){
 }
 
 void loadFLD(){
-	Map newFLD; newFLD=[:]
+	Map newFLD; newFLD= new java.util.concurrent.ConcurrentHashMap()
+	Map<String,Map> pods= sensiboMapFLD	// snapshot: another thread may replace the field while this runs
+	List<String> selected= ((List)settings.SelectedSensiboPods ?: []).collect{ it as String }
+
+	// drop cached data for pods that were deselected or are no longer in the account
+	[sensiboDeviceMapFLD, sensiboDeviceLongFLD, sensiboClimateMapFLD, sensiboCAPMapFLD].each{ Map m ->
+		(m.keySet() as List).each{ k -> if(!(k in selected) || !pods.containsKey(k)) m.remove(k) }
+	}
+
 	// fill in pollChild data
-	sensiboMapFLD.each {
+	pods.each {
 		String PodUid= it.key
 
 		Map stat
-		stat= sensiboMapFLD[PodUid]
+		stat= (Map)it.value
+		if(!(PodUid in selected)) return	// only selected pods have devices; skip the rest
 
 		Map newMap; newMap=[:]
 		for (String k in ['id','temperatureUnit','connectionStatus','room','acState','location','firmwareVersion',
@@ -445,19 +569,27 @@ void loadFLD(){
 
 		stat= newMap
 
-		sensiboCAPMapFLD[PodUid]= [
-				remoteCapabilities: stat.remoteCapabilities,
-				productModel:  (String)stat.productModel ]
-		sensiboCAPMapFLD= sensiboCAPMapFLD
+		if(stat.remoteCapabilities != null){	// routine polls leave remoteCapabilities out; keep the cached copy
+			sensiboCAPMapFLD[PodUid]= [
+					remoteCapabilities: stat.remoteCapabilities,
+					productModel:  (String)stat.productModel ]
+			sensiboCAPMapFLD= sensiboCAPMapFLD
+			sensiboCapsLongFLD= wnow()
+		}
 
 		Map data; data= [:]
-		if(stat){
+		if(stat?.acState){
 			Map acState= stat.acState
 //			logDebug("fillACState PodUID : $PodUid : " + acState)
 
 			String OnOff= acState.on ? "on" : "off"
-			Integer stemp= acState.targetTemperature == null ? stat.measurements.temperature.toInteger() : acState.targetTemperature.toInteger()
 			String tempUnit= acState.temperatureUnit == null ? stat.temperatureUnit : acState.temperatureUnit
+			def rawTemp; rawTemp= acState.targetTemperature
+			if(rawTemp == null && stat.measurements?.temperature != null){
+				// no target (e.g. fan mode): use room temperature, which Sensibo always reports in C
+				rawTemp= tempUnit == "F" ? cToF(stat.measurements.temperature as Double).round() : stat.measurements.temperature
+			}
+			def stemp= rawTemp != null ? rawTemp.toInteger() : "--"
 			String sMode= acState.swing == null ? "stopped" : acState.swing
 			String battery= stat.productModel == "skyv1" ? "battery" : "mains"
 
@@ -482,7 +614,7 @@ void loadFLD(){
 					on               : "--",
 					switch           : "--",
 					currentmode      : "--",
-					targetTemperature: "0",
+					targetTemperature: "--",
 					fanLevel         : "--",
 					swing            : "--",
 					powerSource      : "",
@@ -499,29 +631,20 @@ void loadFLD(){
 		Map acState= data
 		Map ClimateReact= getClimateReact(PodUid)
 
-		Map measure; measure= stat.measurements
+		Map measure; measure= stat?.measurements
 
-		if(measure && (String)acState.Error != "Failed"){
-
-			String dni= PodUid
+		String dni= PodUid
+		if((String)acState.Error == "Failed"){
+			// replace any old Success entry so the device is told the pod is unavailable (it keeps its last values and warns)
+			sensiboDeviceMapFLD[dni]= data
+			sensiboDeviceLongFLD[dni]= wnow()
+			sensiboDeviceMapFLD= sensiboDeviceMapFLD
+		}else if(measure){
 			//logDebug( "fillFields: updating dni $dni")
 
-			Double stemp
-			stemp= measure.temperature ? ((String)measure.temperature).toDouble().round(1) : 0.0D
-			Double ftemp
-			ftemp= measure.feelsLike ? ((String)measure.feelsLike).toDouble().round(1) : 0.0D
-			if((String)acState.temperatureUnit == "F"){
-				stemp= cToF(stemp).round(1)
-				ftemp= cToF(ftemp).round(1)
-			}
-			Long shumidify= measure.humidity ? ((String)measure.humidity).toDouble().round() : 0L
+			Map mdata= measureData(measure, (String)acState.temperatureUnit == "F")
 
-			data= data + [
-					temperature: stemp,
-					feelsLike: ftemp,
-					humidity: shumidify,
-					Climate: ClimateReact.Climate
-			]
+			data= data + mdata + [ Climate: ClimateReact.Climate ]
 
 			if((String)acState.powerSource=='battery'){
 				Integer battpourcentage; battpourcentage= 100
@@ -530,7 +653,7 @@ void loadFLD(){
 					battVoltage= 3000
 				}
 				if(battVoltage < 2850) battpourcentage= 10
-				if(battVoltage > 2850 && battVoltage < 2950) battpourcentage= 50
+				else if(battVoltage < 2950) battpourcentage= 50
 				data= data + [
 						battery: battpourcentage,
 						voltage: battVoltage,
@@ -543,9 +666,168 @@ void loadFLD(){
 			sensiboDeviceMapFLD[dni]= data
 			sensiboDeviceLongFLD[dni]= wnow()
 			sensiboDeviceMapFLD= sensiboDeviceMapFLD
+		}else{
+			// AC state but no measurements: still update the AC state instead of keeping stale data
+			sensiboDeviceMapFLD[dni]= data + [Climate: ClimateReact?.Climate]
+			sensiboDeviceLongFLD[dni]= wnow()
+			sensiboDeviceMapFLD= sensiboDeviceMapFLD
 		}
 	}
 	sensiboMapFLD= newFLD
+}
+
+// Sensibo measurements (temperatures in C) -> device values in the pod's unit. A missing measurement is left out
+// (the device keeps its last value) instead of being reported as 0; 0 itself is a valid reading.
+Map measureData(Map measure, Boolean toF){
+	Map mdata= [:]
+	if(measure?.temperature != null){
+		Double stemp= (measure.temperature as Double).round(1)
+		mdata.temperature= toF ? cToF(stemp).round(1) : stemp
+	}
+	if(measure?.feelsLike != null){
+		Double ftemp= (measure.feelsLike as Double).round(1)
+		mdata.feelsLike= toF ? cToF(ftemp).round(1) : ftemp
+	}
+	if(measure?.humidity != null) mdata.humidity= Math.round(measure.humidity as Double)
+	return mdata
+}
+
+// ---------- Real-time updates (Sensibo event stream, held by the "Sensibo Event Stream" child device) ----------
+
+@Field volatile static Boolean streamUpFLD= false
+@Field volatile static Long sensiboLastFullFLD= 0L	// last successful full refresh
+@Field volatile static Map<String,Boolean> streamPendingFLD= new java.util.concurrent.ConcurrentHashMap()
+
+private void manageStreamDevice(){
+	def sd= getChildDevice(sSTREAMDNI)
+	if(streamEnabled()){
+		if(!sd){
+			try{
+				sd= addChildDevice(getChildNamespace(), sSTREAMTYPE, sSTREAMDNI, ((List)location.hubs)[iZ].id,
+						[label: sSTREAMTYPE, name: sSTREAMTYPE])
+			}catch(e){
+				logError("Could not create the event stream device; is the '${sSTREAMTYPE}' driver installed?", e)
+				return
+			}
+		}
+		sd.connect()
+	}else if(sd){
+		sd.disconnect()
+		deleteChildDevice(sSTREAMDNI)
+		streamDown(true)
+	}
+}
+
+// status line for the app page
+String streamStatusText(){
+	def sd= getChildDevice(sSTREAMDNI)
+	if(!sd) return "Real-time updates: <b>not set up</b> (click Done to create the stream device)"
+	String st= (String)sd.currentValue('streamStatus') ?: 'unknown'
+	String last= (String)sd.currentValue('lastEvent')
+	Long at; at= null
+	try{ at= sd.lastEventAt() as Long }catch(ignored){ }	// older driver code without lastEventAt()
+	String ago= at ? fmtAgo(wnow() - at) : 'none yet'
+	String rf= (String)settings.refreshinminutes ?: "10"
+	String poll= streamUpFLD ? (rf == "30" ? "30" : "15") : (rf == "1" ? "5" : rf)
+	return "Real-time updates: <b>${st}</b><br>Last event: ${last ?: 'none'} (${ago})<br>Full refresh every ${poll} minutes" +
+			(streamUpFLD ? "" : " (normal polling until the stream connects)")
+}
+
+private static String fmtAgo(Long ms){
+	Long s= (ms ?: 0L).intdiv(1000L) as Long	// intdiv: "/" on whole numbers gives a decimal in Groovy
+	if(s < 60L) return "${s}s ago"
+	if(s < 3600L) return "${s.intdiv(60L)} min ago"
+	return "${s.intdiv(3600L)} h ago"
+}
+
+// stream opened: fetch everything once (changes may have happened while it was closed), poll less often
+void streamHello(){
+	logDebug("event stream hello")
+	markStreamUp()
+	// catch up on changes missed while the stream was closed, unless a full refresh ran recently
+	if(wnow() > sensiboLastFullFLD + 300000L) asyncReq('finishRefresh')
+}
+
+// any stream event means it's up (the flag resets when this app's code is saved, while the stream stays open)
+private void markStreamUp(){
+	unschedule('streamDownConfirm')	// reconnected in time: the drop doesn't count
+	if(!streamUpFLD){
+		logInfo("Real-time updates connected")
+		streamUpFLD= true
+		resetSchedule()
+	}
+}
+
+// stream closed or failed: back to the configured polling, unless it reconnects within 2 minutes
+// (now: stopped on purpose, switch immediately)
+void streamDown(Boolean now=false){
+	if(now){
+		unschedule('streamDownConfirm')
+		streamDownConfirm()
+	}else{
+		runIn(120, 'streamDownConfirm')
+	}
+}
+
+void streamDownConfirm(){
+	if(streamUpFLD){
+		logInfo("Real-time updates disconnected; using normal polling")
+		streamUpFLD= false
+		resetSchedule()
+	}
+}
+
+// new measurements for a pod: update the cache and the device directly, no API call
+void streamMeasurements(String id, Map m){
+	markStreamUp()
+	if(!id || !m || sensiboDeviceMapFLD[id] == null) return	// not a selected pod
+	Map md= measureData(m, (String)sensiboDeviceMapFLD[id]?.temperatureUnit == "F")
+	if(!md) return
+	updateDeviceCache(id){ Map t -> t.putAll(md) }
+	getChildDevice(id)?.parseEventData(md)
+}
+
+// a pod changed (AC state, connection, or anything when fields is empty): re-read it. Bursts are grouped.
+void streamChanged(String id, List fields){
+	markStreamUp()
+	if(!id || sensiboDeviceMapFLD[id] == null) return	// not a selected pod
+	if(fields && fields.every{ it == 'measurements' }) return	// the "measurements" event carries those
+	streamPendingFLD[id]= true
+	runIn(3, 'streamFetchPending')
+}
+
+void streamFetchPending(){
+	List<String> ids= (streamPendingFLD.keySet() as List).collect{ it as String }
+	ids.each{ streamPendingFLD.remove(it) }
+	ids.each{ String id ->
+		Map pod= syncPod(id)
+		if(pod){
+			Map all= new java.util.concurrent.ConcurrentHashMap(sensiboMapFLD)
+			all[id]= pod
+			sensiboMapFLD= all
+			loadFLD()
+			getChildDevice(id)?.poll()
+		}
+	}
+}
+
+// GET one pod with the light poll fields
+Map syncPod(String id){
+	if(inBackoff()) return null
+	Map params= restParams("/api/v2/pods/${id}", [fields: sPOLLFIELDS], true)
+	Map res; res= null
+	try{
+		httpGet(params){ resp ->
+			if(resp.status == i200){
+				res= (Map)resp.data?.result
+				noteRequestOk()
+			}
+		}
+	}catch(e){
+		noteError(e)
+		logError("Exception syncPod: ", e)
+	}
+	return res
 }
 
 // Get Climate React settings
@@ -603,7 +885,7 @@ Map<String,String> getSensiboPodList(){
 
 	Map<String,String> pods; pods= [:]
 
-	if(!state.pods || wnow() > (sensiboPodsLongFLD + 300L)){
+	if(!state.pods || wnow() > (sensiboPodsLongFLD + 300000L)){	// cache the pod list for 5 minutes
 		List<Map> res= syncReq()
 		if(res){
 			fillFields(res,true)
@@ -618,7 +900,7 @@ Map<String,String> getSensiboPodList(){
 
 Boolean ping(){
 	logTrace( "ping()")
-	Boolean returnStatus; returnStatus= true
+	Boolean returnStatus; returnStatus= false	// only a 200 response counts as success
 
 	Map deviceListParams= restParams('/api/v2/users/me/pods', [fields:"id,room"],true)
 
@@ -827,7 +1109,7 @@ Boolean inDateThreshold(evt,String sType){
 */
 def refresh(){
 	logTrace( "refresh()")
-	unschedule()
+	unschedule('refreshDevices')	// only the poll; keep logsOff and the post-command cmdPoll
 	refreshDevices()
 	resetSchedule()
 }
@@ -846,10 +1128,10 @@ def refreshDevices(){
 
 void finishRefresh(){
 	logTrace("finishRefresh()")
-	List devices= getChildDevices()
+	List devices= getChildDevices().findAll{ it.deviceNetworkId != sSTREAMDNI }
 	devices.each{ d ->
-		logDebug( "Calling refresh() on device: ${d.id}")
-		d.refresh()
+		logDebug( "Calling poll() on device: ${d.id}")
+		d.poll()	// update from the data just fetched; the device's refresh() asks for a new fetch, so calling it here would loop
 	}
 }
 
@@ -859,7 +1141,7 @@ void pollChildren(String PodUid){
 	logTrace( "pollChildren($PodUid)")
 
 	try{
-		List<Map> res= syncReq()
+		List<Map> res= syncReq(pollFields(false))	// light fields unless capabilities are missing or old
 		if(res){
 			fillFields(res,false)
 		}
@@ -870,64 +1152,48 @@ void pollChildren(String PodUid){
 
 // called by child after command execution to force data gather
 void afterCmdRefresh(){
+	if(streamUpFLD) return	// the stream sends a "changed" event for the command, which re-reads the pod
 	runIn(7,'cmdPoll') // allow commands to finish
 }
 
 void cmdPoll(){ pollChild(null,true) }
 
 // Poll Child is invoked from the Child Device itself as part of the Poll Capability
-Map pollChild( child, Boolean frc=false){
+@Field volatile static Long sensiboLastSyncFLD= 0L
 
-	String dni
-	Map<String,Object> tData
+Map pollChild( child, Boolean frc=false){
 	if(frc){
 		logDebug( "pollChild(): frc: $frc")
 		asyncReq('finishRefresh')
 		return null
+	}
 
-	} else { // it is syncrhonous
-		dni= "${child.device.deviceNetworkId}".toString()
-		logDebug( "pollChild( ${dni} ): frc: $frc")
+	String dni= "${child.device.deviceNetworkId}".toString()
+	logDebug( "pollChild( ${dni} )")
+	Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
+
+	// Fetch synchronously only when there is no cached entry at all (e.g. after a hub reboot or code save), and at
+	// most once a minute. A cached "Failed" entry means the last fetch already found the pod unavailable; fetching
+	// again for every device poll would repeat a full request each time while the pod is offline.
+	if(tData == null && wnow() > sensiboLastSyncFLD + 60000L){
+		sensiboLastSyncFLD= wnow()
+		pollChildren(dni)
 		tData= sensiboDeviceMapFLD[dni]
-		//Long last= sensiboDeviceLongFLD[dni] ?: 0L
-		//Long next= last + pollRateMillis
-		//Long now= wnow()
-		//logTrace( "pollChild($frc) Last Poll Millis= ${last}")
-		if( /* now > next || */ !tData || (String)tData.Error != "Success"){
-			logDebug( "pollChild( ${dni} ): frc: $frc current state: ${sensiboDeviceMapFLD[dni]}")
-
-			pollChildren(dni) // read data from synchronously API
+		if(tData != null){
+			Long currentTime= wnow()
+			sensiboDeviceLongFLD[dni]= currentTime
+			updateDeviceCache(dni){ Map t -> t.updated= currentTime }
 			tData= sensiboDeviceMapFLD[dni]
-			if(tData != null){
-				Long currentTime= wnow()
-				sensiboDeviceLongFLD[dni]= currentTime
-				sensiboDeviceLongFLD= sensiboDeviceLongFLD
-				tData.updated= currentTime
-				sensiboDeviceMapFLD= sensiboDeviceMapFLD
-			}
-
-		}else{
-			tData= sensiboDeviceMapFLD[dni]
-			if(tData != null){
-				//logDebug("pollChild: found child ${dni} ")
-			}
 		}
 	}
 
-	//logDebug( "pollChild: looking for ${dni} from ${sensiboDeviceMapFLD}")
-	tData= sensiboDeviceMapFLD[dni]
-	//logDebug("pollChild DEBUG - TDATA " + tData)
-	if(tData && (String)tData.Error == "Success"){
-		logDebug("pollChild Found, returning data")
-		return (Map)tData
-	}else{
-		logError "pollChild ERROR: Device connection removed? no data for ${dni}"
-		sensiboDeviceLongFLD[dni]= 0L
-		sensiboDeviceLongFLD= sensiboDeviceLongFLD
-		// TODO: flag device as in error state
-		// child.errorState= true
+	if(tData == null){
+		logWarn("pollChild: no data for ${dni} (pod offline, not selected, or Sensibo unreachable)")
 		return null
 	}
+	// a copy, since the device iterates it while the cache may be updated; a "Failed" entry is passed on so the
+	// device keeps its last values and logs that the pod is unavailable
+	return new LinkedHashMap(tData)
 }
 
 
@@ -935,6 +1201,11 @@ Boolean setClimateReactConfiguration(child,String PodUid,String JsonString){
 	logTrace( "setClimateReactConfiguration() called for $PodUid with settings : $JsonString" )
 
 	Boolean result= sendPostJsonClimate(PodUid, JsonString)
+	if(result){
+		// cached Climate React settings (e.g. "notdefined") are now stale; re-read on next use
+		sensiboClimateMapFLD.remove(PodUid)
+		sensiboClimateMapFLD= sensiboClimateMapFLD
+	}
 
 	/*
 	if(result){ // update cache
@@ -964,23 +1235,17 @@ Boolean setClimateReact(child,String PodUid, String ClimateState){
 	String dni= child.device.deviceNetworkId
 
 	Map ClimateReact= getClimateReact(PodUid)
+	if(!ClimateReact){
+		logWarn("setClimateReact: could not read Climate React settings for $PodUid")
+		return false
+	}
 
 	logDebug( "DEBUG " + PodUid + " " + dni + " SAME?")
 	logDebug( "DEBUG " + ClimateReact.Climate + " " + ClimateState)
 	if((String)ClimateReact.Climate == "notdefined"){
-		Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
-
-		if(tData == null){
-			return true
-			//pollChildren(dni)
-			//tData= sensiboDeviceMapFLD[dni]
-		}
-
-		tData.Climate= ClimateReact.Climate
-		tData.Error= "Success"
-		sensiboDeviceMapFLD= sensiboDeviceMapFLD
-
-		return true
+		updateDeviceCache(dni){ Map t -> t.Climate= ClimateReact.Climate }
+		logWarn("setClimateReact: Climate React is not configured for $PodUid; use setClimateReactConfiguration first")
+		return false	// nothing was sent, so don't report the change as done
 	}
 
 	String jsonRequestBody
@@ -995,26 +1260,77 @@ Boolean setClimateReact(child,String PodUid, String ClimateState){
 	Boolean result= sendPutJson(PodUid, jsonRequestBody)
 
 	if(result){ // try to update cache
-		Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
-
-		if(tData == null){
-			return true
-			//pollChildren(dni)
-			//tData= sensiboDeviceMapFLD[dni]
+		updateDeviceCache(dni){ Map t ->
+			t.Climate= ClimateState
+			t.Error= "Success"
 		}
-
-		tData.Climate= ClimateState
-		tData.Error= "Success"
-		sensiboDeviceMapFLD= sensiboDeviceMapFLD
 	}else{
-		Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
-		if(tData == null) return false
-
-		tData.Error= "Failed"
-		sensiboDeviceMapFLD= sensiboDeviceMapFLD
+		updateDeviceCache(dni){ Map t -> t.Error= "Failed" }
 	}
 
 	return result
+}
+
+// Change one acState property (on, targetTemperature, fanLevel, swing) with PATCH, so other values aren't
+// overwritten with possibly stale ones. Falls back to a full acState POST if the hub has no httpPatch.
+@Field volatile static Boolean patchUnsupportedFLD= false
+
+Boolean setACProperty(child, String PodUid, String property, value){
+	logTrace( "setACProperty() called for $PodUid : $property = $value")
+	String dni= child.device.deviceNetworkId
+	Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
+
+	Boolean result; result= patchUnsupportedFLD ? null : sendPatch(PodUid, property, value)
+	if(result == null){	// httpPatch not available: send the full state, built from the cache with this one value changed
+		if(tData == null){
+			logWarn("setACProperty: no cached state for $dni; cannot fall back to a full update")
+			return false
+		}
+		String on= property == 'on' ? (value ? "on" : "off") : (String)tData.on
+		return setACStates(child, PodUid, on, (String)tData.currentmode,
+				property == 'targetTemperature' ? value : tData.targetTemperature,
+				property == 'fanLevel' ? (String)value : (String)tData.fanLevel,
+				property == 'swing' ? (String)value : (String)tData.swing,
+				(String)tData.temperatureUnit)
+	}
+
+	if(result){ // keep the cache in step until the next poll
+		updateDeviceCache(dni){ Map t ->
+			if(property == 'on'){
+				t.on= value ? "on" : "off"
+				t.switch= t.on
+			}else{
+				t[property]= value
+			}
+		}
+	}
+	return result
+}
+
+// returns true/false, or null when the hub has no httpPatch
+Boolean sendPatch(String PodUid, String property, value){
+	String jsonBody= JsonOutput.toJson([newValue: value])
+	Map cmdParams= restParams( "/api/v2/pods/${PodUid}/acStates/${property}", [:], true, jsonBody, true)
+	Boolean ok; ok= false
+	try{
+		logDebug( "HTTP PATCH ${cmdParams.path} body: ${jsonBody}")
+		httpPatch(cmdParams){ resp ->
+			logDebug("sendPatch response status: ${resp.status}")
+			ok= (resp.status == i200)
+		}
+	}catch(Exception e){
+		String es= e.toString()	// includes the exception class name; getClass() isn't allowed in the Hubitat sandbox
+		if(es.contains('MissingMethodException') && es.contains('httpPatch')){
+			logWarn("httpPatch is not available on this hub; using full acState updates instead")
+			patchUnsupportedFLD= true
+			return null
+		}
+		noteError(e)
+		logError( "Exception sendPatch: ", e)
+		ok= false
+	}
+	if(ok) noteRequestOk()
+	return ok
 }
 
 Boolean setACStates(child,String PodUid, String on, String mode, targetTemperature, String fanLevel, String swingM, String sUnit){
@@ -1073,36 +1389,23 @@ Boolean setACStates(child,String PodUid, String on, String mode, targetTemperatu
 	}
 
 	if(result){ // try to update cache
-		Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
-
-		if(tData == null){
-			return true // nevermind
-			//pollChildren(dni)
-			//tData= sensiboDeviceMapFLD[dni]
-		}
-
-		logDebug( "setACStates before Device : " + dni + " state : " + tData)
-
-		tData.on= on
-		tData.switch= on
-		tData.currentmode= mode
-		if(isOn){
-			tData.fanLevel= fanLevel !=null ? fanLevel : tData.fanLevel
-			if(targetTemperature !=0 && targetTemperature != null){
-				tData.targetTemperature= targetTemperature
-				tData.temperatureUnit= sUnit
+		updateDeviceCache(dni){ Map t ->
+			t.on= on
+			t.switch= on
+			t.currentmode= mode
+			if(isOn){
+				t.fanLevel= fanLevel !=null ? fanLevel : t.fanLevel
+				if(targetTemperature !=0 && targetTemperature != null){
+					t.targetTemperature= targetTemperature
+					t.temperatureUnit= sUnit
+				}
+				t.swing= swingM ?: t.swing
 			}
-			tData.swing= swingM ?: tData.swing
+			t.Error= "Success"
 		}
-		tData.Error= "Success"
-		logDebug( "setACStates after Device : " + dni + " state : " + tData)
-		sensiboDeviceMapFLD= sensiboDeviceMapFLD
+		logDebug( "setACStates after Device : " + dni + " state : " + sensiboDeviceMapFLD[dni])
 	}else{
-		Map<String,Object> tData; tData= sensiboDeviceMapFLD[dni]
-		if(tData){
-			tData.Error= "Failed"
-			sensiboDeviceMapFLD= sensiboDeviceMapFLD
-		}
+		updateDeviceCache(dni){ Map t -> t.Error= "Failed" }
 	}
 	return result
 }
@@ -1114,33 +1417,33 @@ Map getCapabilities(String PodUid, String mode){
 	Map data; data= [:]
 
 	//sensiboCAPMapFLD[PodUid]= fillCap(PodUid,stat)
-	Map<String,Map> svData; svData= sensiboCAPMapFLD[PodUid].remoteCapabilities
+	Map<String,Map> svData; svData= (Map)sensiboCAPMapFLD[PodUid]?.remoteCapabilities
 	if(!svData){
 		List<Map> res= syncReq()
 		if(res){
 			fillFields(res,false)
-			svData= sensiboCAPMapFLD[PodUid].remoteCapabilities
+			svData= (Map)sensiboCAPMapFLD[PodUid]?.remoteCapabilities
 		}
 	}
 	if(svData){
 		logDebug("getCapabilities ${svData}")
 
-		data.productModel= (String)sensiboCAPMapFLD[PodUid].productModel
+		data.productModel= (String)sensiboCAPMapFLD[PodUid]?.productModel
 		switch (mode){
 			case "dry":
-				data.remoteCapabilities= (Map)svData.modes.dry
+				data.remoteCapabilities= (Map)svData.modes?.dry
 				break
 			case "cool":
-				data.remoteCapabilities= (Map)svData.modes.cool
+				data.remoteCapabilities= (Map)svData.modes?.cool
 				break
 			case "heat":
-				data.remoteCapabilities= (Map)svData.modes.heat
+				data.remoteCapabilities= (Map)svData.modes?.heat
 				break
 			case "fan":
-				data.remoteCapabilities= (Map)svData.modes.fan
+				data.remoteCapabilities= (Map)svData.modes?.fan
 				break
 			case "auto":
-				data.remoteCapabilities= (Map)svData.modes.auto
+				data.remoteCapabilities= (Map)svData.modes?.auto
 				break
 			case "modes":
 				data.remoteCapabilities= (Map)svData.modes
@@ -1176,23 +1479,24 @@ Boolean sendPutJson(String PodUid, String jsonBody){
 		body: jsonBody
 	] */
 
+	Boolean ok; ok= false
 	try{
 		logDebug( "HTTP PUT REQUEST SYNC sendPutJson")
-		httpPut(cmdParams){ resp ->
+		httpPut(cmdParams){ resp ->	// a return inside this closure would not return from sendPutJson
 			if(resp.status == i200){
 				logDebug( "sendPutJson updated ${resp.data}")
 				logTrace( "Successful call to Sensibo API.")
-
-				return true
+				ok= true
 			}else{
 				logTrace( "Failed call to Sensibo API.")
-				return false
 			}
 		}
 	}catch(Exception e){
+		noteError(e)
 		logError( "Exception Sending Json: ", e)
-		return false
+		ok= false
 	}
+	return ok
 }
 
 Boolean sendPostJsonClimate(String PodUid, String jsonBody){
@@ -1210,22 +1514,24 @@ Boolean sendPostJsonClimate(String PodUid, String jsonBody){
 		body: jsonBody
 	] */
 
+	Boolean ok; ok= false
 	try{
 		logDebug( "HTTP POST REQUEST SYNC sendPostJson")
-		httpPost(cmdParams){ resp ->
+		httpPost(cmdParams){ resp ->	// a return inside this closure would not return from sendPostJsonClimate
 			if(resp.status == i200){
 				logDebug( "sendPostJsonClimate updated ${resp.data}")
 				logTrace( "Successful call to Sensibo API.")
-				return true
+				ok= true
 			}else{
 				logTrace( "Failed call to Sensibo API.")
-				return false
 			}
 		}
 	}catch(Exception e){
+		noteError(e)
 		logError( "Exception Sending Json: ",e)
-		return false
+		ok= false
 	}
+	return ok
 }
 
 // Send state to the Sensibo Pod
@@ -1249,7 +1555,7 @@ Boolean sendJson(String PodUid, String jsonBody){
 
 	try{
 		logDebug( "HTTP POST REQUEST SYNC sendJson")
-		logDebug( "cmdParams: $cmdParams")
+		logDebug( "sendJson path: ${cmdParams.path} body: ${cmdParams.body}")	// not cmdParams: its query holds the API key
 		httpPost(cmdParams){ resp ->
 			logDebug("sendJson response status: ${resp.status}")
 			if(resp.status == i200){
@@ -1265,6 +1571,7 @@ Boolean sendJson(String PodUid, String jsonBody){
 			}
 		}
 	}catch(Exception e){
+		noteError(e)
 		logError( "Exception sendJson: ",e)
 		returnStatus= false
 	}
